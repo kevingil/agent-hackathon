@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import Any, Literal, List
+from pydantic import BaseModel, Field, Json
+from typing import Any, Dict, List, Literal, Optional, Union
 
 
 class DecideResposnse(BaseModel):
@@ -43,6 +43,35 @@ class Plan(BaseModel):
     description: str = Field(description="Clear description of the .")
     tasks: list[PlannerTask] = Field(
         description="A list of tasks to be executed sequentially."
+    )
+
+
+class ToolFunction(BaseModel):
+    """Represents a function call from the LLM."""
+    name: str = Field(description="The name of the function to call.")
+    arguments: str = Field(description="The arguments to call the function with, as a JSON string.")
+
+
+class ToolCall(BaseModel):
+    """Represents a tool call request from the LLM."""
+    id: str = Field(description="The ID of the tool call.")
+    type: str = Field(default="function", description="The type of the tool call.")
+    function: ToolFunction = Field(description="The function details.")
+
+
+class ToolResult(BaseModel):
+    """Represents the result of a tool execution."""
+    tool_call_id: str = Field(description="The ID of the tool call this result is for.")
+    result: str = Field(description="The result of the tool execution.")
+    is_error: bool = Field(default=False, description="Whether the tool execution resulted in an error.")
+
+
+class Plan(BaseModel):
+    """Output schema for the Planner Agent with tool support."""
+    response: str = Field(description="The agent's response to the user.")
+    tool_calls: List[ToolCall] = Field(
+        default_factory=list,
+        description="List of tool calls to execute, if any."
     )
 
 
