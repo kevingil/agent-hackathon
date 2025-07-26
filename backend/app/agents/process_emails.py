@@ -56,17 +56,26 @@ async def initialize_agent_service() -> Tuple[OrchestratorAgent, MCPClient]:
         # Initialize messages with system prompt
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         
+        # Ensure tools is a list and log its structure
+        if not isinstance(tools, list):
+            logger.warning(f"Tools is not a list, converting to list. Type: {type(tools)}")
+            tools = [tools] if tools is not None else []
+            
         logger.info("Initializing OrchestratorAgent...")
-        logger.info(f"Tools type: {type(tools)}")
-        logger.info(f"Tools content: {tools}")
+        logger.info(f"Number of tools: {len(tools)}")
+        if tools:
+            logger.info(f"First tool structure: {json.dumps(tools[0], indent=2) if isinstance(tools[0], dict) else str(tools[0])}")
         
         try:
+            # Create a copy of tools to avoid modifying the original
+            agent_tools = [tool.copy() if hasattr(tool, 'copy') else tool for tool in tools]
+            
             agent = OrchestratorAgent(
                 dev_prompt=SYSTEM_PROMPT,
                 mcp_client=mcp_client,
                 llm=openai_client,
-                messages=messages,
-                tools=tools,
+                messages=messages.copy(),
+                tools=agent_tools,
                 model_name="gpt-4.1-mini"
             )
             logger.info("Successfully initialized OrchestratorAgent")

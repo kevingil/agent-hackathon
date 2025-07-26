@@ -22,16 +22,8 @@ class MCPClient:
             return
 
         if isinstance(self.config, str):
-            # Single server mode - configure for SSE transport
-            # The server is running with transport="sse"
-            # and is configured with host="0.0.0.0", port=8050
-            self._client = Client({
-                "mcpServers": [{
-                    "name": "default",
-                    "url": self.config,
-                    "transport": "sse"
-                }]
-            })
+            # For SSE transport, we just need the URL
+            self._client = Client(self.config)
         else:
             # Configuration mode with multiple servers
             self._client = Client(self.config)
@@ -61,23 +53,18 @@ class MCPClient:
             raise RuntimeError("Not connected to MCP server(s)")
         return list(self._client.servers.keys())
 
-    async def list_tools(self, server: str = None) -> list:
+    async def list_tools(self) -> list:
         """List available tools.
         
-        Args:
-            server (str, optional): Specific server to list tools from. 
-                                  If None, lists tools from all servers.
+        Returns:
+            list: List of available tools.
         """
         if not self._is_connected:
             raise RuntimeError("Not connected to MCP server(s)")
-        return await self._client.list_tools(server)
+        return await self._client.list_tools()
 
-    async def get_tools(self, server: str = None) -> list[dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         """Retrieve tools in a format compatible with OpenAI.
-
-        Args:
-            server (str, optional): Specific server to get tools from.
-                                 If None, gets tools from all servers.
 
         Returns:
             list[dict[str, Any]]: List of tools in OpenAI format.
@@ -85,7 +72,7 @@ class MCPClient:
         if not self._is_connected:
             raise RuntimeError("Not connected to MCP server(s)")
 
-        tools = await self.list_tools(server)
+        tools = await self.list_tools()
         openai_tools = []
 
         for tool in tools:
