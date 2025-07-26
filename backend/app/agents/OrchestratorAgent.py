@@ -1,15 +1,12 @@
 from collections.abc import AsyncGenerator
 from openai import OpenAI
 from .MCP.client import MCPClient
-from .utils.schemas import (
+from app.agents.utils.schemas import (
     CalledToolHistoryResponse, 
-    DecideResposnse,
     Plan, 
     PlannerTask
 )
 from typing import Any
-
-# import asyncio
 import json
 
 
@@ -185,9 +182,10 @@ class OrchestratorAgent:
         else:
             called_tools_prompt = ""  # else just pass an empty string
 
-        prompt = DecideResposnse.render(
+        from app.agents.utils.schemas import DecideResponse
+        prompt = DecideResponse.render(
+            tools=tools,
             question=question,
-            tool_prompt=tools,
             called_tools=called_tools_prompt,
         )
 
