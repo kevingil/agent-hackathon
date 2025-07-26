@@ -15,3 +15,9 @@ install:
 run:
 	@echo "Starting application..."
 	FLASK_APP=run.py FLASK_ENV=development flask run --host=${HOST} --port=${PORT}
+
+# Seed the database with sample data
+# .PHONY: seed
+# seed:
+# 	@echo "Seeding database with sample data..."
+# 	PYTHONPATH=. python -m app.storefront.seed
