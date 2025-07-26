@@ -21,13 +21,18 @@ class MCPClient:
             return
 
         if isinstance(self.config, str):
-            # Single server mode - pass the URL directly to Client
-            self._client = Client({
+            # Single server mode - configure for SSE transport
+            config = {
                 "mcpServers": [{
                     "name": "default",
-                    "url": self.config
-                }]
-            })
+                    "url": self.config,
+                    "transport": {
+                        "type": "sse"
+                    }
+                }],
+                "defaultTransport": "sse"
+            }
+            self._client = Client(config)
         else:
             # Configuration mode with multiple servers
             self._client = Client(self.config)
