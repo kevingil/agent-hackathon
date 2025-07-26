@@ -21,3 +21,9 @@ run:
 agent:
 	@echo "Starting agent workflow to process test emails..."
 	PYTHONPATH=. python -m app.agents.process_emails
+
+# Start the MCP server
+.PHONY: mcp
+mcp:
+	@echo "Starting MCP server..."
+	PYTHONPATH=. python -m app.agents.MCP.server
