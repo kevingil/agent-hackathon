@@ -46,24 +46,22 @@ const Orders = () => {
   }, []);
 
   return (
-    <div className="d-flex justify-content-center align-items-center mt-5">
-      <div className="row flex-column">
-        {loading ? (
-          <div className="text-center">
-            <h2>Loading...</h2>
+    <div className=" ">
+      {loading ? (
+        <div className="text-center">
+          <h2>Loading...</h2>
+        </div>
+      ) : orders.length === 0 ? (
+        <div className="text-center">
+          <h2>No Orders</h2>
+        </div>
+      ) : (
+        orders.map((order: Order) => (
+          <div key={order.id} className="mb-4">
+            <OrderCard order={order} />
           </div>
-        ) : orders.length === 0 ? (
-          <div className="text-center">
-            <h2>No Orders</h2>
-          </div>
-        ) : (
-          orders.map((order: Order) => (
-            <div key={order.id} className="mb-4">
-              <OrderCard order={order} />
-            </div>
-          ))
-        )}
-      </div>
+        ))
+      )}
     </div>
   );
 };
