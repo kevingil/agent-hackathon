@@ -1,3 +1,4 @@
+# Requires .env file from /backend
 FROM postgres:17
 
 # Install build dependencies

@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
+from app.database import db
 
 from app import create_app, socketio
 from app.agents.OrchestratorAgent import OrchestratorAgent
@@ -72,7 +73,7 @@ async def main():
         await mcp_client.disconnect()
 
 if __name__ == '__main__':
-    # Start the web application
+    # Create and configure the Flask app
     app = create_app()
     
     # Start the agent service in the background
