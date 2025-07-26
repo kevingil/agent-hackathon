@@ -1,5 +1,6 @@
 from typing import Any, Dict, Optional, Union
-from fastmcp import FastMCP, Client
+from fastmcp.server.server import FastMCP
+from fastmcp.client.client import Client
 from contextlib import asynccontextmanager
 
 class MCPClient:
@@ -22,17 +23,15 @@ class MCPClient:
 
         if isinstance(self.config, str):
             # Single server mode - configure for SSE transport
-            config = {
+            # The server is running with transport="sse"
+            # and is configured with host="0.0.0.0", port=8050
+            self._client = Client({
                 "mcpServers": [{
                     "name": "default",
                     "url": self.config,
-                    "transport": {
-                        "type": "sse"
-                    }
-                }],
-                "defaultTransport": "sse"
-            }
-            self._client = Client(config)
+                    "transport": "sse"
+                }]
+            })
         else:
             # Configuration mode with multiple servers
             self._client = Client(self.config)

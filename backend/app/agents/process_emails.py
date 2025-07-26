@@ -38,34 +38,52 @@ When in doubt, ask for clarification."""
 async def initialize_agent_service() -> Tuple[OrchestratorAgent, MCPClient]:
     """Initialize and return the OrchestratorAgent with MCP client integration."""
     try:
-        # Initialize MCP client
+        logger.info("Initializing MCP client...")
         mcp_client = MCPClient()
         await mcp_client.connect()
         
-        # Get tools from MCP
+        logger.info("Getting tools from MCP...")
         tools = await mcp_client.get_tools()
         logger.info(f"Loaded {len(tools)} tools from MCP")
         
-        # Initialize OpenAI client
+        # Log the structure of the first tool for debugging
+        if tools:
+            logger.info(f"First tool structure: {json.dumps(tools[0], indent=2) if isinstance(tools[0], dict) else str(tools[0])}")
+        
+        logger.info("Initializing OpenAI client...")
         openai_client = OpenAI()
         
         # Initialize messages with system prompt
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         
-        # Initialize OrchestratorAgent
-        agent = OrchestratorAgent(
-            dev_prompt=SYSTEM_PROMPT,
-            mcp_client=mcp_client,
-            llm=openai_client,
-            messages=messages,
-            tools=tools,
-            model_name="gpt-4.1-mini",
-            max_iterations=10
-        )
+        logger.info("Initializing OrchestratorAgent...")
+        logger.info(f"Tools type: {type(tools)}")
+        logger.info(f"Tools content: {tools}")
         
-        return agent, mcp_client
+        try:
+            agent = OrchestratorAgent(
+                dev_prompt=SYSTEM_PROMPT,
+                mcp_client=mcp_client,
+                llm=openai_client,
+                messages=messages,
+                tools=tools,
+                model_name="gpt-4.1-mini"
+            )
+            logger.info("Successfully initialized OrchestratorAgent")
+            return agent, mcp_client
+            
+        except Exception as agent_init_error:
+            logger.error(f"Error initializing OrchestratorAgent: {str(agent_init_error)}")
+            logger.error(f"Agent initialization error type: {type(agent_init_error).__name__}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            raise
+            
     except Exception as e:
         logger.error(f"Failed to initialize agent service: {str(e)}")
+        logger.error(f"Error type: {type(e).__name__}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise
 
 def load_processed_emails() -> Dict[str, str]:
