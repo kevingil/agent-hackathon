@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncGenerator
 from openai import OpenAI
 from .MCP.client import MCPClient
@@ -145,45 +146,137 @@ class OrchestratorAgent:
         """
         self.messages.append({"role": "user", "content": query})
 
-    async def call_tool(self, tool_calls: list[dict]) -> list[dict]:
-        """Recives a list of tool calls and calls the tools
+    async def call_tool(self, tool_calls) -> list[dict]:
+        """Receives a list of tool calls and calls the tools
 
         Args:
-            tools (list[dict]): The tools to call.
-
-        REturns:
-            list[dict]: The results of the tool calls.
-        """
-        results = []
-        for i in range(len(tool_calls)):  # for each tool
-            name = tool_calls[i]["name"]  # get name
-            args = tool_calls[i]["arguments"]  # get arguments
-            result = await self.mcp_client.call_tool(name, args)  # call tool
-            results.append({"name": name, "result": result})  # append result to list
-        return results
-
-    def extract_tools(self, response: str) -> list[dict] | str:
-        """Extract the tool calls from the response. Create a tool call list containing tool name and arguments
-
-        Args:
-            response (str): The response from the LLM.
+            tool_calls: Either a list of tool call dicts or a string error message
 
         Returns:
-            list[dict]: List of tools | str
+            list[dict]: The results of the tool calls or error information
         """
-        tool_calls: list[dict] = []
-        for tool_call in response.output:
-            if tool_call.type != "function_call":
-                continue
-            # select tool name
-            name = tool_call.name
-            # get the arguments for the tool
-            args = json.loads(tool_call.arguments)
+        # If we received an error message instead of tool calls
+        if isinstance(tool_calls, str):
+            return [{"error": True, "message": tool_calls}]
+            
+        # Ensure tool_calls is a list
+        if not isinstance(tool_calls, list):
+            return [{"error": True, "message": f"Expected list of tool calls, got {type(tool_calls).__name__}"}]
 
-            tool_calls.append({"name": name, "arguments": args})
-        if not tool_calls:
-            return "No tools called"
-        return tool_calls
+        results = []
+        for tool in tool_calls:  # for each tool
+            try:
+                if not isinstance(tool, dict):
+                    results.append({"error": True, "message": f"Expected dict, got {type(tool).__name__}"})
+                    continue
+                    
+                name = tool.get("name")
+                args = tool.get("arguments", {})
+                
+                if not name:
+                    results.append({"error": True, "message": "Tool call missing 'name' field"})
+                    continue
+                    
+                # Call the tool through MCP client
+                result = await self.mcp_client.call_tool(name, args)
+                results.append({
+                    "name": name,
+                    "arguments": args,
+                    "result": result,
+                    "error": False
+                })
+                
+            except Exception as e:
+                results.append({
+                    "error": True,
+                    "name": name if 'name' in locals() else "unknown",
+                    "message": f"Error calling tool: {str(e)}"
+                })
+                
+        return results
+
+    def extract_tools(self, response) -> list[dict] | str:
+        """Extract the tool calls from the response.
+
+        Args:
+            response: The response from the LLM (could be string or object with text attribute)
+
+        Returns:
+            list[dict] | str: List of tool call dicts or error message string
+        """
+        if not response:
+            return "No response received"
+
+        # Extract text from response if it's an object with text attribute
+        if hasattr(response, 'text'):
+            response_text = response.text
+        else:
+            response_text = str(response)
+
+        # If the response is already a list of tool calls, return it
+        if isinstance(response_text, list) and all(isinstance(x, dict) for x in response_text):
+            return response_text
+
+        # If the response is a string that looks like JSON, try to parse it
+        if isinstance(response_text, str):
+            response_text = response_text.strip()
+            
+            # Try to find JSON in the response
+            json_start = response_text.find('{')
+            if json_start != -1:
+                try:
+                    # Try to parse as complete JSON
+                    import json
+                    response_data = json.loads(response_text[json_start:])
+                    
+                    # Handle different response formats
+                    if 'selected_tools' in response_data and 'thoughts' in response_data:
+                        # Format: {'thoughts': '...', 'selected_tools': ['tool1', 'tool2']}
+                        tool_names = response_data.get('selected_tools', [])
+                        return [{'name': name, 'arguments': {}} for name in tool_names]
+                    
+                    elif 'tool_calls' in response_data:
+                        # Format: {'tool_calls': [{'name': 'tool1', 'arguments': {...}}]}
+                        return response_data['tool_calls']
+                        
+                    elif 'tools' in response_data:
+                        # Format: {'tools': [{'name': 'tool1', 'arguments': {...}}]}
+                        return response_data['tools']
+                        
+                    elif isinstance(response_data, dict) and 'name' in response_data:
+                        # Format: {'name': 'tool1', 'arguments': {...}}
+                        return [response_data]
+                        
+                except json.JSONDecodeError:
+                    # If not valid JSON, try to extract tool calls using regex
+                    pass
+            
+            # Try to extract tool calls using regex as fallback
+            try:
+                import re
+                tool_pattern = r'"name"\s*:\s*"([^"]+)"[^}]*"arguments"\s*:\s*({[^}]*})'
+                matches = re.finditer(tool_pattern, response_text)
+                
+                tool_calls = []
+                for match in matches:
+                    try:
+                        name = match.group(1)
+                        args_str = match.group(2)
+                        args = json.loads(args_str) if args_str.strip() else {}
+                        tool_calls.append({
+                            'name': name,
+                            'arguments': args if isinstance(args, dict) else {}
+                        })
+                    except (json.JSONDecodeError, IndexError):
+                        continue
+                
+                if tool_calls:
+                    return tool_calls
+                    
+            except Exception as e:
+                print(f"Error in regex extraction: {str(e)}")
+                
+        return "No tools called or could not parse tool calls"
 
     async def decide(self, question: str, called_tools: list[dict] | None = None) -> AsyncGenerator[str, None]:
         """Decide which tool to use to answer the question.
@@ -254,24 +347,47 @@ class OrchestratorAgent:
             response = ''.join(response_chunks)
             tools = self.extract_tools(response)
 
-            if not tools:
+            # If no tools were found or there was an error, break the loop
+            if not tools or isinstance(tools, str):
+                error_msg = tools if isinstance(tools, str) else "No tools found in response"
+                called_tools.append({
+                    "tool": "orchestrator",
+                    "arguments": {},
+                    "isError": True,
+                    "result": error_msg
+                })
                 break
                 
+            # Call the tools
             results = await self.call_tool(tools)
 
-            for i in range(len(results)):
-                result_text = ''
-                if hasattr(results[i], 'content') and results[i].content:
-                    result_text = results[i].content[0].text if hasattr(results[i].content[0], 'text') else str(results[i].content[0])
+            # Process the results
+            for i, result in enumerate(results):
+                # Handle both string error messages and structured results
+                if isinstance(result, str):
+                    result_text = result
+                    is_error = True
+                else:
+                    # Handle different result formats
+                    if hasattr(result, 'content') and result.content:
+                        if isinstance(result.content, list) and hasattr(result.content[0], 'text'):
+                            result_text = result.content[0].text
+                        else:
+                            result_text = str(result.content[0]) if result.content else str(result)
+                    else:
+                        result_text = str(result)
                     
-                called_tools.append(
-                    {
-                        "tool": tools[i].get("name", "unknown"),
-                        "arguments": tools[i].get("arguments", {}),
-                        "isError": getattr(results[i], 'isError', False),
-                        "result": result_text,
-                    }
-                )
+                    is_error = result.get('error', False) if isinstance(result, dict) else False
+                
+                # Get tool info, handling case where tools[i] might be a string or dict
+                tool_info = tools[i] if i < len(tools) and isinstance(tools[i], dict) else {}
+                
+                called_tools.append({
+                    "tool": tool_info.get("name", "unknown"),
+                    "arguments": tool_info.get("arguments", {}),
+                    "isError": is_error,
+                    "result": result_text,
+                })
 
             called_tools_history = CalledToolHistoryResponse(
                 question=question,
