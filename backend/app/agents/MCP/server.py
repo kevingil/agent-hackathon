@@ -40,9 +40,9 @@ def add_to_cart(part_id: str | int, cart: list[dict]) -> list:
     try:
         part = store_service.get_item_by_id(part_id=part_id)
         cart.append(part)
-        return f"Part {part_id} was added to cart"
-    except Exception as e:  # TODO: add more specific exceptions
-        return f"Error adding part {part_id} to cart: {e}"
+        logger.info(f"Part {part_id} was added to cart")
+    except Exception as e:
+        logger.error(f"Error adding part {part_id} to cart: {e}")
     return cart
 
 
@@ -50,25 +50,26 @@ def add_to_cart(part_id: str | int, cart: list[dict]) -> list:
     name="remove_from_cart",
     description="Remove a part to the cart given the part id",
 )
-def remove_from_cart(part_id: str | int, cart: list[list]) -> str:
+def remove_from_cart(part_id: str | int, cart: list[dict]) -> list[dict]:
     """Remove a part from the cart
     Args:
         part_id (str | int): The part id to remove from the cart
 
     Returns:
-        str: A message indicating the part was removed from the cart
+        list[dict] The cart without the part (or with if we cant find part)
     """
     for i in range(len(cart)):
         item = cart[i]
         if item["part_id"] == part_id:
             del cart[i]
-            return f"Part {part_id} was added to cart"
-
-    return f"Part {part_id} was not in cart"
+            logger.info(f"Part {part_id} was added to cart")
+            return cart
+    logger.error(f"Part {part_id} was not in cart")
+    return cart
 
 
 @mcp.tool(name="checkout_cart", description="Checkout the cart")
-def checkout_cart(cart_id: str | int) -> str:
+def checkout_cart(cart: list[dict]) -> str:
     """
     Checkout the cart
     Args:
@@ -77,9 +78,46 @@ def checkout_cart(cart_id: str | int) -> str:
     Returns:
         str: A message indicating the cart was checked out
     """
-    message = ""
+    try:
+        # Check if store service is available
+        if not store_service:
+            error_msg = "Store service not available. Please configure database connection with POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB environment variables."
+            logger.error(f"🚨 Vector search service not available: {error_msg}")
+            return json.dumps({"error": error_msg})
 
-    return message
+        for i in range(len(cart)):
+            item = cart[i]
+            # perofrm the search
+            try:
+                # Try to run in existing event loop context
+                available = asyncio.run(
+                    store_service.check_availability(part_id=item["part_id"])
+                )
+                if available == 0:
+                    logger.error(f"Part {item['part_id']} is out of stock")
+
+                elif available < item["amount"]:
+                    logger.error(
+                        f"{item['part_id']} only has {available} in stock, but you requested {item['amount']} of {item['name']}"
+                    )
+            except RuntimeError:
+                # If there's already a loop running, use asyncio.create_task() approach
+                import concurrent.futures
+
+                def run_async():
+                    return asyncio.run(
+                        store_service.check_availability(part_id=item["part_id"])
+                    )
+
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(run_async)
+                    results = future.result()
+
+    except Exception as e:
+        logger.error(f"Error in vector_search_code: {e}")
+        return json.dumps({"error": f"Search failed: {str(e)}"})
+
+    return f"Checked out cart: {cart}"
 
 
 @mcp.tool(name="find_inventory", description="Search the database inventory for a part")
