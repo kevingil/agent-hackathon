@@ -1,4 +1,3 @@
-import Card from "react-bootstrap/Card";
 import { useState, useEffect } from "react";
 import OrderCard from "../ListItems/OrderCard";
 import type { Order } from "../../types/Order";
@@ -47,21 +46,25 @@ const Orders = () => {
   }, []);
 
   return (
-    <>
-      <Card style={{ width: "18rem" }}>
-        <Card.Body>
-          {loading ? (
-            <Card.Title>Loading ... </Card.Title>
-          ) : orders.length === 0 ? (
-            <Card.Title> No Orders </Card.Title>
-          ) : (
-            orders?.map((order: Order) => (
-              <OrderCard order={order} key={order.id} />
-            ))
-          )}
-        </Card.Body>
-      </Card>
-    </>
+    <div className="d-flex justify-content-center align-items-center mt-5">
+      <div className="row flex-column">
+        {loading ? (
+          <div className="text-center">
+            <h2>Loading...</h2>
+          </div>
+        ) : orders.length === 0 ? (
+          <div className="text-center">
+            <h2>No Orders</h2>
+          </div>
+        ) : (
+          orders.map((order: Order) => (
+            <div key={order.id} className="mb-4">
+              <OrderCard order={order} />
+            </div>
+          ))
+        )}
+      </div>
+    </div>
   );
 };
 
