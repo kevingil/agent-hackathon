@@ -199,7 +199,7 @@ class OrchestratorAgent:
         """Extract the tool calls from the response.
 
         Args:
-            response: The response from the LLM (could be string or object with text attribute)
+            response: The response from the LLM (could be string, object with text attribute, or event object)
 
         Returns:
             list[dict] | str: List of tool call dicts or error message string
@@ -207,67 +207,141 @@ class OrchestratorAgent:
         if not response:
             return "No response received"
 
-        # Extract text from response if it's an object with text attribute
-        if hasattr(response, 'text'):
+        response_text = None
+        
+        # Handle different response types
+        if hasattr(response, 'part') and hasattr(response.part, 'text'):
+            # Handle event object with part.text
+            response_text = response.part.text
+        elif hasattr(response, 'text'):
+            # Handle simple object with text attribute
             response_text = response.text
+        elif isinstance(response, str):
+            # Handle direct string response
+            response_text = response
         else:
+            # Try to convert to string as last resort
             response_text = str(response)
-
-        # If the response is already a list of tool calls, return it
-        if isinstance(response_text, list) and all(isinstance(x, dict) for x in response_text):
-            return response_text
+            
+        # If we still don't have text to process
+        if not response_text:
+            return "No valid response text found"
+            
+        # If the response is already a list of tool calls in OpenAI format, return it
+        if isinstance(response_text, list) and all(isinstance(x, dict) and 'function' in x for x in response_text):
+            # Convert to the format expected by call_tool
+            return [{
+                'name': call['function']['name'],
+                'arguments': json.loads(call['function']['arguments']) if call['function'].get('arguments') else {}
+            } for call in response_text]
 
         # If the response is a string that looks like JSON, try to parse it
         if isinstance(response_text, str):
             response_text = response_text.strip()
             
-            # Try to find JSON in the response
-            json_start = response_text.find('{')
-            if json_start != -1:
+            # First, try to find and extract the innermost JSON object
+            json_objects = []
+            stack = []
+            start_index = -1
+            
+            for i, char in enumerate(response_text):
+                if char == '{':
+                    if not stack:
+                        start_index = i
+                    stack.append(char)
+                elif char == '}':
+                    if stack:
+                        stack.pop()
+                        if not stack and start_index != -1:
+                            json_objects.append(response_text[start_index:i+1])
+                            start_index = -1
+            
+            # Process all found JSON objects
+            for json_str in reversed(json_objects):  # Try most recent (deepest) JSON first
                 try:
-                    # Try to parse as complete JSON
-                    import json
-                    response_data = json.loads(response_text[json_start:])
+                    response_data = json.loads(json_str)
                     
-                    # Handle different response formats
-                    if 'selected_tools' in response_data and 'thoughts' in response_data:
-                        # Format: {'thoughts': '...', 'selected_tools': ['tool1', 'tool2']}
-                        tool_names = response_data.get('selected_tools', [])
-                        return [{'name': name, 'arguments': {}} for name in tool_names]
+                    # Handle OpenAI tool calls format
+                    if 'tool_calls' in response_data:
+                        return [{
+                            'name': call['function']['name'],
+                            'arguments': json.loads(call['function']['arguments']) if call['function'].get('arguments') else {}
+                        } for call in response_data['tool_calls']]
                     
-                    elif 'tool_calls' in response_data:
-                        # Format: {'tool_calls': [{'name': 'tool1', 'arguments': {...}}]}
-                        return response_data['tool_calls']
+                    # Handle direct function calls format
+                    if 'function' in response_data and 'name' in response_data['function']:
+                        return [{
+                            'name': response_data['function']['name'],
+                            'arguments': json.loads(response_data['function']['arguments']) 
+                                        if response_data['function'].get('arguments') 
+                                        else {}
+                        }]
                         
-                    elif 'tools' in response_data:
-                        # Format: {'tools': [{'name': 'tool1', 'arguments': {...}}]}
+                    # Handle legacy formats for backward compatibility
+                    if 'selected_tools' in response_data and 'thoughts' in response_data:
+                        tool_names = response_data.get('selected_tools', [])
+                        if tool_names:  # Only return if we actually have tools
+                            return [{'name': name, 'arguments': {}} for name in tool_names]
+                    
+                    if 'tools' in response_data and response_data['tools']:
                         return response_data['tools']
                         
-                    elif isinstance(response_data, dict) and 'name' in response_data:
-                        # Format: {'name': 'tool1', 'arguments': {...}}
+                    if 'name' in response_data:
                         return [response_data]
                         
-                except json.JSONDecodeError:
-                    # If not valid JSON, try to extract tool calls using regex
-                    pass
+                except json.JSONDecodeError as e:
+                    print(f"JSON decode error: {str(e)}")
+                    continue
+                except Exception as e:
+                    print(f"Error processing JSON: {str(e)}")
+                    continue
             
-            # Try to extract tool calls using regex as fallback
+            # If we get here, no valid JSON was found - try regex as fallback
             try:
                 import re
-                tool_pattern = r'"name"\s*:\s*"([^"]+)"[^}]*"arguments"\s*:\s*({[^}]*})'
+                # Match both new and old formats
+                tool_pattern = r'(?:\"name\"\s*:\s*\"([^\"]+)\"[^}]*\"arguments\"\s*:\s*({[^}]*})|\"function\"\s*:\s*{\s*\"name\"\s*:\s*\"([^\"]+)\"[^}]*\"arguments\"\s*:\s*\"({[^\"]*})\"|\b(\w+)\s*\(([^)]*)\))'
                 matches = re.finditer(tool_pattern, response_text)
                 
                 tool_calls = []
                 for match in matches:
                     try:
-                        name = match.group(1)
-                        args_str = match.group(2)
-                        args = json.loads(args_str) if args_str.strip() else {}
+                        args = {}
+                        # Try new format first (function/name/arguments)
+                        if match.group(3) and match.group(4):
+                            name = match.group(3)
+                            args_str = match.group(4).replace('\\\"', '\"')
+                            try:
+                                args = json.loads(args_str) if args_str.strip() else {}
+                            except json.JSONDecodeError:
+                                # If not valid JSON, try to parse as key=value pairs
+                                for pair in re.findall(r'\"?([\w_]+)\"?\s*:\s*\"?([^\",}]+)\"?', args_str):
+                                    args[pair[0]] = pair[1].strip('\"\\\'')
+                        # Fall back to old format
+                        elif match.group(1) and match.group(2):
+                            name = match.group(1)
+                            args_str = match.group(2)
+                            try:
+                                args = json.loads(args_str) if args_str.strip() else {}
+                            except json.JSONDecodeError:
+                                # If not valid JSON, try to parse as key=value pairs
+                                for pair in re.findall(r'\"?([\w_]+)\"?\s*:\s*\"?([^\",}]+)\"?', args_str):
+                                    args[pair[0]] = pair[1].strip('\"\\\'')
+                        # Try simple function call format: function_name(arg1=val1, arg2=val2)
+                        elif match.group(5) and match.group(6):
+                            name = match.group(5)
+                            args_str = match.group(6)
+                            for pair in re.findall(r'([\w_]+)\s*=\s*([^,)]+)', args_str):
+                                args[pair[0]] = pair[1].strip('\"\\\'')
+                        else:
+                            continue
+                            
                         tool_calls.append({
                             'name': name,
-                            'arguments': args if isinstance(args, dict) else {}
+                            'arguments': args
                         })
-                    except (json.JSONDecodeError, IndexError):
+                    except Exception as e:
+                        print(f"Error parsing tool call: {str(e)}")
                         continue
                 
                 if tool_calls:
@@ -311,8 +385,28 @@ class OrchestratorAgent:
                 yield chunk
                 
         except Exception as e:
-            logger.error(f"Error in decide: {str(e)}")
+            print(f"Error in decide: {str(e)}")
             yield f"Error: {str(e)}"
+
+    def _format_tool_call(self, tool_call: dict) -> str:
+        """Format a tool call for debug output."""
+        name = tool_call.get('name', 'unknown')
+        args = tool_call.get('arguments', {})
+        args_str = ', '.join(f"{k}={v}" for k, v in args.items()) if args else 'no arguments'
+        return f"{name}({args_str})"
+
+    def _format_tool_result(self, result: dict) -> str:
+        """Format a tool result for debug output."""
+        if isinstance(result, str):
+            return f"Error: {result}"
+        
+        error = result.get('error', False)
+        name = result.get('name', 'unknown')
+        result_text = result.get('result', 'No result')
+        
+        if error:
+            return f"❌ {name} failed: {result_text}"
+        return f"✅ {name} succeeded: {result_text}"
 
     async def stream(self, question: str) -> AsyncGenerator[dict, None]:
         """Stream the process of answering a question, possibly involving tool calls.
@@ -325,31 +419,44 @@ class OrchestratorAgent:
         """
         called_tools = []
         for i in range(10):
+            # Print step header
+            step_header = f"\n{'='*80}\nStep {i+1}\n{'='*80}"
             yield {
                 "is_task_complete": False,
                 "require_user_input": False,
-                "content": f"Step {i}",
+                "content": step_header,
             }
+            print(step_header)
 
+            # Collect response chunks
             response_chunks = []
+            print("\n🤖 Processing response...")
             async for chunk in self.decide(question, called_tools):
                 # Extract text from ResponseCreatedEvent if needed
                 chunk_text = getattr(chunk, 'text', str(chunk))
                 response_chunks.append(chunk_text)
                 
-                yield {
-                    "is_task_complete": False,
-                    "require_user_input": False,
-                    "content": chunk_text,
-                }
+                # Only yield non-empty chunks
+                if chunk_text.strip():
+                    yield {
+                        "is_task_complete": False,
+                        "require_user_input": False,
+                        "content": chunk_text,
+                    }
                 
             # Join all response chunks for tool extraction
             response = ''.join(response_chunks)
+            print("\n📝 Raw response:")
+            print(response)
+            
+            # Extract tools from response
+            print("\n🛠️  Extracting tools...")
             tools = self.extract_tools(response)
-
-            # If no tools were found or there was an error, break the loop
-            if not tools or isinstance(tools, str):
-                error_msg = tools if isinstance(tools, str) else "No tools found in response"
+            
+            if isinstance(tools, str):
+                # Handle error case
+                error_msg = f"Error extracting tools: {tools}"
+                print(f"❌ {error_msg}")
                 called_tools.append({
                     "tool": "orchestrator",
                     "arguments": {},
@@ -358,11 +465,22 @@ class OrchestratorAgent:
                 })
                 break
                 
+            if not tools:
+                print("ℹ️  No tools found in response. Assuming task is complete.")
+                break
+                
+            # Print tool calls
+            print("\n🔧 Tool calls:")
+            for i, tool in enumerate(tools, 1):
+                print(f"{i}. {self._format_tool_call(tool)}")
+            
             # Call the tools
+            print("\n🚀 Executing tool calls...")
             results = await self.call_tool(tools)
-
+            
             # Process the results
-            for i, result in enumerate(results):
+            print("\n📋 Tool results:")
+            for i, (tool, result) in enumerate(zip(tools, results)):
                 # Handle both string error messages and structured results
                 if isinstance(result, str):
                     result_text = result
@@ -379,12 +497,21 @@ class OrchestratorAgent:
                     
                     is_error = result.get('error', False) if isinstance(result, dict) else False
                 
-                # Get tool info, handling case where tools[i] might be a string or dict
-                tool_info = tools[i] if i < len(tools) and isinstance(tools[i], dict) else {}
+                # Get tool info
+                tool_name = tool.get('name', f'tool_{i}')
                 
+                # Print formatted result
+                result_display = self._format_tool_result({
+                    'name': tool_name,
+                    'error': is_error,
+                    'result': result_text[:200] + ('...' if len(result_text) > 200 else '')
+                })
+                print(f"{i+1}. {result_display}")
+                
+                # Store in called_tools
                 called_tools.append({
-                    "tool": tool_info.get("name", "unknown"),
-                    "arguments": tool_info.get("arguments", {}),
+                    "tool": tool_name,
+                    "arguments": tool.get('arguments', {}),
                     "isError": is_error,
                     "result": result_text,
                 })
