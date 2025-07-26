@@ -16,8 +16,8 @@ run:
 	@echo "Starting application..."
 	FLASK_APP=run.py FLASK_ENV=development flask run --host=${HOST} --port=${PORT}
 
-# Seed the database with sample data
-# .PHONY: seed
-# seed:
-# 	@echo "Seeding database with sample data..."
-# 	PYTHONPATH=. python -m app.storefront.seed
+# Run agent workflow to process test emails and place orders
+.PHONY: agent
+agent:
+	@echo "Starting agent workflow to process test emails..."
+	PYTHONPATH=. python -m app.agents.process_emails
