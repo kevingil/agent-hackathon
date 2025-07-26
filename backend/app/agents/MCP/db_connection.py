@@ -65,8 +65,8 @@ async def search_keyword(
                 query = text("""
                     SELECT 
                         cse.id,
-                        cse.session_id,
-                        cse.file_path,
+                        cse.part_name,
+                        cse.,
                         cse.file_content,
                         cse.chunk_index,
                         cse.chunk_size,
@@ -157,8 +157,8 @@ async def search_keyword(
                     SELECT 
                         css.id,
                         css.name,
-                        css.github_url,
-                        css.agent_type,
+                        css.description,
+                        css.quantity,
                         css.vector_embeddings_processed,
                         css.created_at,
                         css.updated_at,
@@ -249,6 +249,9 @@ async def search_keyword(
         except Exception as e:
             logger.error(f"Error getting sessions with embeddings: {e}")
             raise
+
+    # stock item (inventory)
+    # order item (return order)
 
     async def checkout_cart(self, session_id: uuid.UUID) -> List[Dict[str, Any]]:
         """ """

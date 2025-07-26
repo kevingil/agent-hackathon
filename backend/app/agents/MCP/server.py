@@ -29,7 +29,7 @@ def write_db(query: str) -> str:
     name="add_to_cart",
     description="Add a part to the cart given the part id",
 )
-def add_to_cart(part_id: str | int) -> str:
+def add_to_cart(part_id: str | int, cart: list[dict]) -> list:
     """Add a part to the cart
     Args:
         part_id (str | int): The part id to add to the cart
@@ -37,16 +37,20 @@ def add_to_cart(part_id: str | int) -> str:
     Returns:
         str: A message indicating the part was added to the cart
     """
-    message = ""
-
-    return message
+    try:
+        part = store_service.get_item_by_id(part_id=part_id)
+        cart.append(part)
+        return f"Part {part_id} was added to cart"
+    except Exception as e:  # TODO: add more specific exceptions
+        return f"Error adding part {part_id} to cart: {e}"
+    return cart
 
 
 @mcp.tool(
     name="remove_from_cart",
     description="Remove a part to the cart given the part id",
 )
-def remove_from_cart(part_id: str | int) -> str:
+def remove_from_cart(part_id: str | int, cart: list[list]) -> str:
     """Remove a part from the cart
     Args:
         part_id (str | int): The part id to remove from the cart
@@ -54,9 +58,13 @@ def remove_from_cart(part_id: str | int) -> str:
     Returns:
         str: A message indicating the part was removed from the cart
     """
-    message = ""
+    for i in range(len(cart)):
+        item = cart[i]
+        if item["part_id"] == part_id:
+            del cart[i]
+            return f"Part {part_id} was added to cart"
 
-    return message
+    return f"Part {part_id} was not in cart"
 
 
 @mcp.tool(name="checkout_cart", description="Checkout the cart")
@@ -88,7 +96,7 @@ def find_inventory(keyword: str, limit: int = 10) -> str:
         f"🚨 MCP TOOL CALLED: find_inventory with  keyword='{keyword}' session_id={...}"
     )
     try:
-        # Check if vector search service is available
+        # Check if store service is available
         if not store_service:
             error_msg = "Store service not available. Please configure database connection with POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB environment variables."
             logger.error(f"🚨 Vector search service not available: {error_msg}")
@@ -97,8 +105,7 @@ def find_inventory(keyword: str, limit: int = 10) -> str:
         # Validate inputs
         limit = min(max(1, limit), 50)  # Clamp between 1 and 50
 
-        # Generate embedding for the query
-        # Perform the search
+        # perofrm the search
         try:
             # Try to run in existing event loop context
             results = asyncio.run(
