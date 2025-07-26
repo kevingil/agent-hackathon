@@ -1,10 +1,12 @@
 from mcp.server.fastmcp import FastMCP
 from pathlib import Path
-
+from mcp.server.fastmcp.utilities.logging import get_logger
 from .db_connection import StoreService
+import json
+import asyncio
 
 SQLLITE_DB = Path(__file__).parent.parent.parent.parent.parent.parent / "store.db"
-
+logger = get_logger(__name__)
 store_service = StoreService()
 
 # Create an MCP server
@@ -73,7 +75,7 @@ def checkout_cart(cart_id: str | int) -> str:
 
 
 @mcp.tool(name="find_inventory", description="Search the database inventory for a part")
-def find_inventory(keyword: str) -> str:
+def find_inventory(keyword: str, limit: int = 10) -> str:
     """
     Search the database inventory for a part using a keryword
     Args:
@@ -82,9 +84,59 @@ def find_inventory(keyword: str) -> str:
     Returns:
         str: A message indicating the part was found in the inventory
     """
-    message = ""
+    logger.info(
+        f"🚨 MCP TOOL CALLED: find_inventory with  keyword='{keyword}' session_id={...}"
+    )
+    try:
+        # Check if vector search service is available
+        if not store_service:
+            error_msg = "Store service not available. Please configure database connection with POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB environment variables."
+            logger.error(f"🚨 Vector search service not available: {error_msg}")
+            return json.dumps({"error": error_msg})
 
-    return message
+        # Validate inputs
+        limit = min(max(1, limit), 50)  # Clamp between 1 and 50
+
+        # Generate embedding for the query
+        # Perform the search
+        try:
+            # Try to run in existing event loop context
+            results = asyncio.run(
+                store_service.search_keyword(
+                    keyword=keyword,
+                    session_id=...,
+                    limit=limit,
+                )
+            )
+        except RuntimeError:
+            # If there's already a loop running, use asyncio.create_task() approach
+            import concurrent.futures
+
+            def run_async():
+                return asyncio.run(
+                    store_service.search_keyword(
+                        keyword=keyword,
+                        session_id=...,
+                        limit=limit,
+                    )
+                )
+
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_async)
+                results = future.result()
+
+        # Format results
+        response = {
+            "keyword": keyword,
+            "total_results": len(results),
+            "results": results,
+        }
+
+        return json.dumps(response, indent=2)
+
+    except Exception as e:
+        logger.error(f"Error in vector_search_code: {e}")
+        return json.dumps({"error": f"Search failed: {str(e)}"})
 
 
 # TODO: add tools to read from dummy database (store)

@@ -5,8 +5,7 @@ This module provides standalone database connections without requiring the main 
 
 import uuid
 from typing import List, Optional, Dict, Any
-from sqlmodel import Session, create_engine, select, text
-from sqlalchemy import func
+from sqlmodel import Session, create_engine, text
 import logging
 import numpy as np
 
@@ -41,116 +40,109 @@ class StoreService:
             )
         self.engine = mcp_engine
 
-    async def search_keyword(
-        self,
-        query_embedding: List[float],
-        session_id: Optional[uuid.UUID] = None,
-        limit: int = 10,
-        similarity_threshold: float = 0.7,
-    ) -> List[Dict[str, Any]]:
-        """
-        Search for similar code chunks using vector similarity.
 
-        Args:
-            query_embedding: The embedding vector to search for
-            session_id: Optional session ID to filter results
-            limit: Maximum number of results to return
-            similarity_threshold: Minimum similarity score (0-1)
+async def search_keyword(
+    self,
+    keyword: str,
+    session_id: Optional[uuid.UUID] = None,
+    limit: int = 10,
+) -> List[Dict[str, Any]]:
+    """
+    Search for similar code chunks using a keyword.
 
-        Returns:
-            List of similar code chunks with metadata
-        """
-        try:
-            with get_mcp_session() as session:
-                # Build the similarity search query dynamically to avoid parameter type issues
-                if session_id:
-                    query = text("""
-                        SELECT 
-                            cse.id,
-                            cse.session_id,
-                            cse.file_path,
-                            cse.file_content,
-                            cse.chunk_index,
-                            cse.chunk_size,
-                            cse.file_metadata,
-                            cse.created_at,
-                            css.name as session_name,
-                            css.github_url,
-                            1 - (cse.embedding_vector <=> :query_embedding) as similarity
-                        FROM codesearchembedding cse
-                        JOIN codesearchsession css ON cse.session_id = css.id
-                        WHERE 
-                            cse.session_id = :session_id_filter
-                            AND cse.embedding_vector IS NOT NULL
-                            AND (1 - (cse.embedding_vector <=> :query_embedding)) >= :similarity_threshold
-                        ORDER BY cse.embedding_vector <=> :query_embedding
-                        LIMIT :limit_val
-                    """)
+    Args:
+        keyword: The keyword to search for
+        session_id: Optional session ID to filter results
+        limit: Maximum number of results to return
 
-                    result = session.execute(
-                        query,
-                        {
-                            "query_embedding": query_embedding,
-                            "session_id_filter": str(session_id),
-                            "similarity_threshold": similarity_threshold,
-                            "limit_val": limit,
-                        },
-                    )
-                else:
-                    query = text("""
-                        SELECT 
-                            cse.id,
-                            cse.session_id,
-                            cse.file_path,
-                            cse.file_content,
-                            cse.chunk_index,
-                            cse.chunk_size,
-                            cse.file_metadata,
-                            cse.created_at,
-                            css.name as session_name,
-                            css.github_url,
-                            1 - (cse.embedding_vector <=> :query_embedding) as similarity
-                        FROM codesearchembedding cse
-                        JOIN codesearchsession css ON cse.session_id = css.id
-                        WHERE 
-                            cse.embedding_vector IS NOT NULL
-                            AND (1 - (cse.embedding_vector <=> :query_embedding)) >= :similarity_threshold
-                        ORDER BY cse.embedding_vector <=> :query_embedding
-                        LIMIT :limit_val
-                    """)
+    Returns:
+        List of similar code chunks with metadata
+    """
+    try:
+        with get_mcp_session() as session:
+            # Build the keyword search query dynamically
+            if session_id:
+                query = text("""
+                    SELECT 
+                        cse.id,
+                        cse.session_id,
+                        cse.file_path,
+                        cse.file_content,
+                        cse.chunk_index,
+                        cse.chunk_size,
+                        cse.file_metadata,
+                        cse.created_at,
+                        css.name as session_name,
+                        css.github_url
+                    FROM store cse
+                    JOIN storesession css ON cse.session_id = css.id
+                    WHERE 
+                        cse.session_id = :session_id_filter
+                        AND cse.file_content ILIKE :keyword_filter
+                    ORDER BY cse.created_at DESC
+                    LIMIT :limit_val
+                """)
 
-                    result = session.execute(
-                        query,
-                        {
-                            "query_embedding": query_embedding,
-                            "similarity_threshold": similarity_threshold,
-                            "limit_val": limit,
-                        },
-                    )
+                result = session.exec(
+                    query,
+                    {
+                        "session_id_filter": str(session_id),
+                        "keyword_filter": f"%{keyword}%",
+                        "limit_val": limit,
+                    },
+                )
+            else:
+                query = text("""
+                    SELECT 
+                        cse.id,
+                        cse.session_id,
+                        cse.file_path,
+                        cse.file_content,
+                        cse.chunk_index,
+                        cse.chunk_size,
+                        cse.file_metadata,
+                        cse.created_at,
+                        css.name as session_name,
+                        css.github_url
+                    FROM codesearchembedding cse
+                    JOIN codesearchsession css ON cse.session_id = css.id
+                    WHERE 
+                        cse.file_content ILIKE :keyword_filter
+                    ORDER BY cse.created_at DESC
+                    LIMIT :limit_val
+                """)
 
-                results = []
-                for row in result:
-                    results.append(
-                        {
-                            "id": str(row.id),
-                            "session_id": str(row.session_id),
-                            "session_name": row.session_name,
-                            "github_url": row.github_url,
-                            "file_path": row.file_path,
-                            "file_content": row.file_content,
-                            "chunk_index": row.chunk_index,
-                            "chunk_size": row.chunk_size,
-                            "file_metadata": row.file_metadata,
-                            "similarity": float(row.similarity),
-                            "created_at": row.created_at.isoformat(),
-                        }
-                    )
+                result = session.exec(
+                    query,
+                    {
+                        "keyword_filter": f"%{keyword}%",
+                        "limit_val": limit,
+                    },
+                )
 
-                return results
+            # Process the results
+            results = []
+            for row in result:
+                results.append(
+                    {
+                        "id": row.id,
+                        "session_id": row.session_id,
+                        "file_path": row.file_path,
+                        "file_content": row.file_content,
+                        "chunk_index": row.chunk_index,
+                        "chunk_size": row.chunk_size,
+                        "file_metadata": row.file_metadata,
+                        "created_at": row.created_at,
+                        "session_name": row.session_name,
+                        "github_url": row.github_url,
+                    }
+                )
 
-        except Exception as e:
-            logger.error(f"Error performing vector search: {e}")
-            raise
+            return results
+
+    except Exception as e:
+        logger.error(f"Error searching database: {e}")
+        raise
 
     async def add_to_cart(self) -> List[Dict[str, Any]]:
         """
