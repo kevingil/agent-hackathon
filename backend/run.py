@@ -5,7 +5,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from app.database import db
 
-from app import create_app, socketio
+from app import create_app
+from app.extensions import socketio
 from app.agents.OrchestratorAgent import OrchestratorAgent
 from app.agents.MCP.client import MCPClient
 
