@@ -1,13 +1,13 @@
-from mcp.server.fastmcp import FastMCP
-from pathlib import Path
-from mcp.server.fastmcp.utilities.logging import get_logger
-from .db_connection import StoreService
 import json
-import asyncio
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.utilities.logging import get_logger
 
-SQLLITE_DB = Path(__file__).parent.parent.parent.parent.parent.parent / "store.db"
+from app.database import db
+from app.storefront.models import StockItem, OrderItem
+
+
 logger = get_logger(__name__)
-store_service = StoreService()
+# store_service = StoreService()
 
 # Create an MCP server
 mcp = FastMCP(
@@ -18,18 +18,10 @@ mcp = FastMCP(
 
 
 @mcp.tool(
-    name="search",
-    description="Search inside a json file",
-)
-def write_db(query: str) -> str:
-    pass
-
-
-@mcp.tool(
     name="add_to_cart",
     description="Add a part to the cart given the part id",
 )
-def add_to_cart(part_id: str | int, cart: list[dict]) -> list:
+def add_to_cart(item_id: str | int, quantity: int, cart: list) -> list:
     """Add a part to the cart
     Args:
         part_id (str | int): The part id to add to the cart
@@ -37,87 +29,52 @@ def add_to_cart(part_id: str | int, cart: list[dict]) -> list:
     Returns:
         str: A message indicating the part was added to the cart
     """
+    if not cart:
+        return [{"msg": "Cart is empty"}]
+    if not item_id:
+        return [{"msg": "Item id is required"}]
     try:
-        part = store_service.get_item_by_id(part_id=part_id)
-        cart.append(part)
-        logger.info(f"Part {part_id} was added to cart")
-    except Exception as e:
-        logger.error(f"Error adding part {part_id} to cart: {e}")
-    return cart
-
-
-@mcp.tool(
-    name="remove_from_cart",
-    description="Remove a part to the cart given the part id",
-)
-def remove_from_cart(part_id: str | int, cart: list[dict]) -> list[dict]:
-    """Remove a part from the cart
-    Args:
-        part_id (str | int): The part id to remove from the cart
-
-    Returns:
-        list[dict] The cart without the part (or with if we cant find part)
-    """
-    for i in range(len(cart)):
-        item = cart[i]
-        if item["part_id"] == part_id:
-            del cart[i]
-            logger.info(f"Part {part_id} was added to cart")
-            return cart
-    logger.error(f"Part {part_id} was not in cart")
-    return cart
-
-
-@mcp.tool(name="checkout_cart", description="Checkout the cart")
-def checkout_cart(cart: list[dict]) -> str:
-    """
-    Checkout the cart
-    Args:
-        cart_id (str | int): The cart id to checkout
-
-    Returns:
-        str: A message indicating the cart was checked out
-    """
-    try:
-        # Check if store service is available
-        if not store_service:
-            error_msg = "Store service not available. Please configure database connection with POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB environment variables."
-            logger.error(f"🚨 Vector search service not available: {error_msg}")
-            return json.dumps({"error": error_msg})
-
-        for i in range(len(cart)):
-            item = cart[i]
-            # perofrm the search
+        item = StockItem.query.get(item_id)
+        if item:
             try:
-                # Try to run in existing event loop context
-                available = asyncio.run(
-                    store_service.check_availability(part_id=item["part_id"])
+                new_order_item = OrderItem(
+                    stock_item_id=item.id,
+                    quantity=quantity,
+                    unit_cost=item.cost,
+                    unit_price=item.list_price,
                 )
-                if available == 0:
-                    logger.error(f"Part {item['part_id']} is out of stock")
-
-                elif available < item["amount"]:
-                    logger.error(
-                        f"{item['part_id']} only has {available} in stock, but you requested {item['amount']} of {item['name']}"
-                    )
-            except RuntimeError:
-                # If there's already a loop running, use asyncio.create_task() approach
-                import concurrent.futures
-
-                def run_async():
-                    return asyncio.run(
-                        store_service.check_availability(part_id=item["part_id"])
-                    )
-
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(run_async)
-                    results = future.result()
+                db.session.add(new_order_item)
+                db.session.commit()
+            except Exception as e:
+                return [{"msg": f"creating new item: {e}"}]
 
     except Exception as e:
-        logger.error(f"Error in vector_search_code: {e}")
-        return json.dumps({"error": f"Search failed: {str(e)}"})
+        return [{"msg": f"Item not found {e}"}]
+    return [{"msg": "Item added to cart"}]
 
-    return f"Checked out cart: {cart}"
+
+@mcp.tool(name="find_inventory", description="Search the database inventory for a part")
+def remove_from_cart(item_id: int | str, cart: list) -> str:
+    """
+    Search the database inventory for a part using a keryword
+    Args:
+        keyword: The keyword to search for in the inventory database
+
+    Returns:
+        str: A message indicating the part was found in the inventory
+    """
+    if not cart:
+        return [{"msg": "Cart is empty"}]
+    if not item_id:
+        return [{"msg": "Item id is required"}]
+    for i in range(len(cart)):
+        order_item = cart[i]
+        order_item.id
+        if item_id == order_item.id:
+            del cart[i]
+            return [{"msg": f"Item {item_id} removed from cart"}]
+
+    return [{"msg": f"Item {item_id} not found in cart"}]
 
 
 @mcp.tool(name="find_inventory", description="Search the database inventory for a part")
@@ -130,64 +87,50 @@ def find_inventory(keyword: str, limit: int = 10) -> str:
     Returns:
         str: A message indicating the part was found in the inventory
     """
-    logger.info(
-        f"🚨 MCP TOOL CALLED: find_inventory with  keyword='{keyword}' session_id={...}"
-    )
+
+    if not keyword:
+        return [["error", "Keyword is required"]]
+
     try:
-        # Check if store service is available
-        if not store_service:
-            error_msg = "Store service not available. Please configure database connection with POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB environment variables."
-            logger.error(f"🚨 Vector search service not available: {error_msg}")
-            return json.dumps({"error": error_msg})
-
-        # Validate inputs
-        limit = min(max(1, limit), 50)  # Clamp between 1 and 50
-
-        # perofrm the search
-        try:
-            # Try to run in existing event loop context
-            results = asyncio.run(
-                store_service.search_keyword(
-                    keyword=keyword,
-                    session_id=...,
-                    limit=limit,
-                )
-            )
-        except RuntimeError:
-            # If there's already a loop running, use asyncio.create_task() approach
-            import concurrent.futures
-
-            def run_async():
-                return asyncio.run(
-                    store_service.search_keyword(
-                        keyword=keyword,
-                        session_id=...,
-                        limit=limit,
-                    )
-                )
-
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(run_async)
-                results = future.result()
-
-        # Format results
-        response = {
-            "keyword": keyword,
-            "total_results": len(results),
-            "results": results,
-        }
-
-        return json.dumps(response, indent=2)
-
+        items = (
+            StockItem.query.filter(StockItem.content.ilike(f"%{keyword}%"))
+            .limit(limit)
+            .all()
+        )
     except Exception as e:
         logger.error(f"Error in vector_search_code: {e}")
         return json.dumps({"error": f"Search failed: {str(e)}"})
 
+    if not items:
+        return [["error", "Keyword is required"]]
 
-# TODO: add tools to read from dummy database (store)
-# TODO: add tools to update database after exectuion
-# TODO: add to user car cart (partNum), remove from cart, checkout cart
-# TODO: find inventory queryword serch or rag search (parnum qwuery) and also natural language query
+    results = []
+    for item in items:
+        results.append(
+            {
+                "id": str(item.id),
+                "session_id": str(item.name),
+                "session_name": str(item.description),
+                "cost": str(item.cost),
+                "list_price": str(item.list_price),
+                "quantity": str(item.quantity),
+            }
+        )
+
+    return results
+
+
+@mcp.tool(name="checkout_cart", description="Check out the cart")
+def checkout_cart(cart: list) -> str:
+    """ """
+    if not cart:
+        return [{"msg": "Cart is empty"}]
+    for i in range(len(cart)):
+        item = cart[i]
+
+
+# TODO: checkout cart
+# TODO: rag search (parnum qwuery) and also natural language query
 
 # Run the server
 if __name__ == "__main__":
