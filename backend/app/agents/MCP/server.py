@@ -1,11 +1,10 @@
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.utilities.logging import get_logger
-from app.storefront.services.order import OrderService
-from app.storefront.services.inventory import InventoryService
+from ..storefront.services.order import OrderService
+from ..storefront.services.inventory import InventoryService
 
 
 logger = get_logger(__name__)
-# store_service = StoreService()
 
 # Create an MCP server
 mcp = FastMCP(
