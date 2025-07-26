@@ -21,10 +21,13 @@ class MCPClient:
             return
 
         if isinstance(self.config, str):
-            # Single server mode
-            mcp = FastMCP("MCP Server")
-            mcp.add_server("default", self.config)
-            self._client = Client(mcp)
+            # Single server mode - pass the URL directly to Client
+            self._client = Client({
+                "mcpServers": [{
+                    "name": "default",
+                    "url": self.config
+                }]
+            })
         else:
             # Configuration mode with multiple servers
             self._client = Client(self.config)

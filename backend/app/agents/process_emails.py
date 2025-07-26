@@ -5,10 +5,18 @@ Agent workflow for processing test emails in .md format and placing orders.
 This script reads test email files in markdown format, parses their content,
 and uses the agent framework to process orders based on the email content.
 """
-import os
+import asyncio
+import json
 import logging
+import os
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
+
+from openai import OpenAI
+
+from app.agents.MCP.client import MCPClient
+from app.agents.OrchestratorAgent import OrchestratorAgent
 
 # Configure logging
 logging.basicConfig(
@@ -17,14 +25,81 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Default directory for test emails
-TEST_EMAILS_DIR = Path(__file__).parent.parent.parent.parent / 'test_emails'
+# Default directories
+BASE_DIR = Path(__file__).parent.parent.parent.parent
+TEST_EMAILS_DIR = BASE_DIR / 'test_emails'
+PROCESSED_EMAILS_FILE = BASE_DIR / 'processed_emails.json'
 
-def process_email_file(file_path: Path) -> bool:
+# System prompt for the agent
+SYSTEM_PROMPT = """You are an order processing assistant. Your task is to analyze emails and extract 
+order information to create purchase orders. Be precise with quantities, product names, and other details.
+When in doubt, ask for clarification."""
+
+async def initialize_agent_service() -> Tuple[OrchestratorAgent, MCPClient]:
+    """Initialize and return the OrchestratorAgent with MCP client integration."""
+    try:
+        # Initialize MCP client
+        mcp_client = MCPClient()
+        await mcp_client.connect()
+        
+        # Get tools from MCP
+        tools = await mcp_client.get_tools()
+        logger.info(f"Loaded {len(tools)} tools from MCP")
+        
+        # Initialize OpenAI client
+        openai_client = OpenAI()
+        
+        # Initialize messages with system prompt
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        
+        # Initialize OrchestratorAgent
+        agent = OrchestratorAgent(
+            dev_prompt=SYSTEM_PROMPT,
+            mcp_client=mcp_client,
+            llm=openai_client,
+            messages=messages,
+            tools=tools,
+            model_name="gpt-4.1-mini",
+            max_iterations=10
+        )
+        
+        return agent, mcp_client
+    except Exception as e:
+        logger.error(f"Failed to initialize agent service: {str(e)}")
+        raise
+
+def load_processed_emails() -> Dict[str, str]:
+    """Load the set of already processed emails."""
+    if not PROCESSED_EMAILS_FILE.exists():
+        return {}
+    
+    try:
+        with open(PROCESSED_EMAILS_FILE, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Error loading processed emails: {str(e)}")
+        return {}
+
+def mark_email_processed(email_path: str, status: str = "completed") -> None:
+    """Mark an email as processed with the given status."""
+    processed = load_processed_emails()
+    processed[email_path] = {
+        "status": status,
+        "processed_at": datetime.utcnow().isoformat()
+    }
+    
+    try:
+        with open(PROCESSED_EMAILS_FILE, 'w') as f:
+            json.dump(processed, f, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving processed emails: {str(e)}")
+
+async def process_email_file(agent: OrchestratorAgent, file_path: Path) -> bool:
     """
     Process a single email file and place orders based on its content.
     
     Args:
+        agent: Initialized OrchestratorAgent
         file_path: Path to the email file to process
         
     Returns:
@@ -36,27 +111,43 @@ def process_email_file(file_path: Path) -> bool:
             email_content = f.read()
             
         logger.info(f"Processing email file: {file_path}")
+        print(f"\n{'='*80}\nProcessing email: {file_path.name}\n{'='*80}")
         
-        # TODO: Implement email content parsing and order processing
-        # This is where you would integrate with your agent framework
-        # to process the email content and place orders
+        # Process the email with the agent
+        result = None
+        async for chunk in agent.stream(email_content):
+            if 'content' in chunk and chunk['content']:
+                print(chunk['content'], end='', flush=True)
+            
+            if chunk.get('is_task_complete', False):
+                result = chunk
+                break
         
-        # Example of what the processing might look like:
-        # from app.agents.OrchestratorAgent import OrchestratorAgent
-        # agent = OrchestratorAgent()
-        # result = agent.process_email(email_content)
-        # return result.success
+        # Print tool execution history if available
+        if result and 'tool_history' in result and result['tool_history']:
+            print("\n\nTool execution summary:")
+            print("-" * 40)
+            for tool in result['tool_history']:
+                status = "✓" if not tool.get('isError', False) else "✗"
+                print(f"{status} {tool['tool']}({tool['arguments']})")
+                if tool.get('result'):
+                    print(f"   → {tool['result']}")
         
-        logger.info(f"Successfully processed email: {file_path}")
+        # Mark the email as processed
+        mark_email_processed(str(file_path), 
+                           "completed" if result and not result.get('error') else "failed")
+        
+        print(f"\n{'='*80}\nFinished processing: {file_path.name}\n{'='*80}")
         return True
         
     except Exception as e:
         logger.error(f"Error processing email file {file_path}: {str(e)}")
+        mark_email_processed(str(file_path), f"error: {str(e)}")
         return False
 
-def process_emails(directory: Optional[Path] = None) -> None:
+async def process_emails(directory: Optional[Path] = None) -> None:
     """
-    Process all .md files in the specified directory as test emails.
+    Process .md files in the specified directory as test emails, one at a time.
     
     Args:
         directory: Directory containing test email files. Defaults to TEST_EMAILS_DIR.
@@ -76,19 +167,48 @@ def process_emails(directory: Optional[Path] = None) -> None:
         logger.warning(f"No .md files found in {directory}")
         return
     
-    logger.info(f"Found {len(email_files)} email files to process")
+    # Load already processed emails
+    processed_emails = load_processed_emails()
     
-    # Process each email file
-    success_count = 0
-    for email_file in email_files:
-        if process_email_file(email_file):
-            success_count += 1
+    # Filter out already processed emails and sort by modification time (oldest first)
+    unprocessed_emails = [
+        f for f in email_files 
+        if str(f) not in processed_emails
+    ]
+    unprocessed_emails.sort(key=lambda f: f.stat().st_mtime)
     
-    logger.info(f"Processing complete. Successfully processed {success_count}/{len(email_files)} files.")
+    if not unprocessed_emails:
+        logger.info("No unprocessed emails found.")
+        return
+    
+    logger.info(f"Found {len(unprocessed_emails)} unprocessed email(s).")
+    
+    # Initialize agent service
+    try:
+        agent, mcp_client = await initialize_agent_service()
+        
+        # Process only the oldest unprocessed email
+        email_to_process = unprocessed_emails[0]
+        logger.info(f"Processing email: {email_to_process.name}")
+        
+        # Process the email
+        success = await process_email_file(agent, email_to_process)
+        
+        if success:
+            logger.info(f"Successfully processed email: {email_to_process.name}")
+        else:
+            logger.warning(f"Failed to process email: {email_to_process.name}")
+        
+    except Exception as e:
+        logger.error(f"Error in email processing workflow: {str(e)}")
+    finally:
+        # Clean up
+        if 'mcp_client' in locals():
+            await mcp_client.disconnect()
 
 if __name__ == "__main__":
-    # Create test_emails directory if it doesn't exist
-    TEST_EMAILS_DIR.mkdir(exist_ok=True)
+    # Create necessary directories if they don't exist
+    TEST_EMAILS_DIR.mkdir(exist_ok=True, parents=True)
     
-    # Process emails
-    process_emails()
+    # Run the async main function
+    asyncio.run(process_emails())
