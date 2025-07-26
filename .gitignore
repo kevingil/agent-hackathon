@@ -5,7 +5,8 @@ backend/.env
 __pycache__/
 .flaskenv
 
-
+# processed emails
+processed_emails.json
 
 
 # frontend

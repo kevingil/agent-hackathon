@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -112,7 +112,7 @@ def mark_email_processed(email_path: str, status: str = "completed") -> None:
     processed = load_processed_emails()
     processed[email_path] = {
         "status": status,
-        "processed_at": datetime.utcnow().isoformat()
+        "processed_at": datetime.now(timezone.utc).isoformat()
     }
     
     try:
@@ -133,43 +133,74 @@ async def process_email_file(agent: OrchestratorAgent, file_path: Path) -> bool:
         bool: True if processing was successful, False otherwise
     """
     try:
-        # Read the email content
-        with open(file_path, 'r') as f:
-            email_content = f.read()
+        logger.info(f"Starting to process email file: {file_path}")
+        
+        # Read the email content with error handling
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                email_content = f.read()
+            logger.info(f"Successfully read email content, length: {len(email_content)} characters")
+        except Exception as e:
+            logger.error(f"Failed to read email file {file_path}: {str(e)}", exc_info=True)
+            mark_email_processed(str(file_path), f"read_error: {str(e)}")
+            return False
             
-        logger.info(f"Processing email file: {file_path}")
         print(f"\n{'='*80}\nProcessing email: {file_path.name}\n{'='*80}")
         
-        # Process the email with the agent
-        result = None
-        async for chunk in agent.stream(email_content):
-            if 'content' in chunk and chunk['content']:
-                print(chunk['content'], end='', flush=True)
+        try:
+            # Process the email with the agent
+            result = None
+            logger.info("Starting to process email with agent...")
             
-            if chunk.get('is_task_complete', False):
-                result = chunk
-                break
-        
-        # Print tool execution history if available
-        if result and 'tool_history' in result and result['tool_history']:
-            print("\n\nTool execution summary:")
-            print("-" * 40)
-            for tool in result['tool_history']:
-                status = "✓" if not tool.get('isError', False) else "✗"
-                print(f"{status} {tool['tool']}({tool['arguments']})")
-                if tool.get('result'):
-                    print(f"   → {tool['result']}")
-        
-        # Mark the email as processed
-        mark_email_processed(str(file_path), 
-                           "completed" if result and not result.get('error') else "failed")
-        
-        print(f"\n{'='*80}\nFinished processing: {file_path.name}\n{'='*80}")
-        return True
-        
+            try:
+                async for chunk in agent.stream(email_content):
+                    if 'content' in chunk and chunk['content']:
+                        print(chunk['content'], end='', flush=True)
+                    
+                    if chunk.get('is_task_complete', False):
+                        result = chunk
+                        logger.info("Received task completion signal from agent")
+                        break
+                
+                # Log tool execution history if available
+                if result:
+                    logger.info(f"Agent processing completed. Result keys: {list(result.keys())}")
+                    if 'tool_history' in result and result['tool_history']:
+                        logger.info(f"Tool history length: {len(result['tool_history'])}")
+                        print("\n\nTool execution summary:")
+                        print("-" * 40)
+                        for i, tool in enumerate(result['tool_history'], 1):
+                            status = "✓" if not tool.get('isError', False) else "✗"
+                            logger.info(f"Tool {i}: {tool.get('tool', 'unknown')}, Success: {status}")
+                            print(f"{status} {tool.get('tool', 'unknown')}({tool.get('arguments', '')})")
+                            if tool.get('result'):
+                                print(f"   → {tool['result']}")
+                    
+                    # Check for errors in the result
+                    if result.get('error'):
+                        logger.error(f"Agent reported an error: {result.get('error')}")
+                        mark_email_processed(str(file_path), f"agent_error: {result.get('error')}")
+                        return False
+                
+                # Mark the email as processed
+                mark_email_processed(str(file_path), "completed")
+                logger.info(f"Successfully processed email: {file_path.name}")
+                print(f"\n{'='*80}\nSuccessfully processed: {file_path.name}\n{'='*80}")
+                return True
+                
+            except Exception as stream_error:
+                logger.error(f"Error during agent stream processing: {str(stream_error)}", exc_info=True)
+                mark_email_processed(str(file_path), f"stream_error: {str(stream_error)}")
+                return False
+                
+        except Exception as process_error:
+            logger.error(f"Error in email processing: {str(process_error)}", exc_info=True)
+            mark_email_processed(str(file_path), f"process_error: {str(process_error)}")
+            return False
+            
     except Exception as e:
-        logger.error(f"Error processing email file {file_path}: {str(e)}")
-        mark_email_processed(str(file_path), f"error: {str(e)}")
+        logger.critical(f"Unexpected error in process_email_file: {str(e)}", exc_info=True)
+        mark_email_processed(str(file_path), f"unexpected_error: {str(e)}")
         return False
 
 async def process_emails(directory: Optional[Path] = None) -> None:

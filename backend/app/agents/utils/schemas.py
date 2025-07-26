@@ -2,9 +2,45 @@ from pydantic import BaseModel, Field, Json
 from typing import Any, Dict, List, Literal, Optional, Union
 
 
-class DecideResposnse(BaseModel):
+class DecideResponse(BaseModel):
     thoughts: list[str] = Field(description="List of thoughts")
     selected_tools: list[dict] = Field(description="List of selected tools")
+    
+    @classmethod
+    def render(
+        cls,
+        tools: list[dict],
+        question: str,
+        called_tools: list[dict],
+        **kwargs
+    ) -> str:
+        """Render the prompt for deciding which tools to use."""
+        tool_descriptions = "\n".join(
+            f"- {tool['name']}: {tool.get('description', 'No description')}"
+            for tool in tools
+        )
+        
+        called_tools_str = "No tools have been called yet."
+        if called_tools:
+            called_tools_str = "\n".join(
+                f"- {tool.get('name', 'Unknown')}: {tool.get('result', 'No result')}"
+                for tool in called_tools
+            )
+        
+        return f"""
+        You are an AI assistant that helps decide which tools to use to answer a question.
+        
+        Available tools:
+        {tool_descriptions}
+        
+        Previously called tools and their results:
+        {called_tools_str}
+        
+        Question: {question}
+        
+        Based on the question and previous tool results, which tools should be used next?
+        Respond with a JSON object containing 'thoughts' and 'selected_tools'.
+        """
 
 
 class CalledToolHistoryResponse(BaseModel):
