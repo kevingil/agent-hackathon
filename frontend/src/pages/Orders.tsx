@@ -116,11 +116,15 @@ const OrdersPage = () => {
             <div style={{ display: "flex", gap: 40, marginBottom: 24 }}>
               <div>
                 <div style={{ fontSize: 15, color: "#888" }}>Created</div>
-                <div style={{ fontWeight: 600 }}>{selectedOrder.created_at}</div>
+                <div style={{ fontWeight: 600 }}>
+                  {new Date(selectedOrder.created_at).toLocaleString()}
+                </div>
               </div>
               <div>
                 <div style={{ fontSize: 15, color: "#888" }}>Updated</div>
-                <div style={{ fontWeight: 600 }}>{selectedOrder.updated_at}</div>
+                <div style={{ fontWeight: 600 }}>
+                  {new Date(selectedOrder.updated_at).toLocaleString()}
+                </div>
               </div>
               <div>
                 <div style={{ fontSize: 15, color: "#888" }}>Total</div>
