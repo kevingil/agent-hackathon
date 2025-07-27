@@ -1,6 +1,7 @@
 from typing import List, Optional
 from datetime import datetime
 from sqlalchemy.exc import SQLAlchemyError
+from flask import current_app
 from sqlalchemy import or_
 from app.database import db
 from ..models import StockItem
@@ -18,16 +19,17 @@ class InventoryService:
     ) -> StockItem:
         """Create a new stock item."""
         try:
-            item = StockItem(
-                name=name,
-                description=description,
-                cost=cost,
-                list_price=list_price,
-                quantity=quantity
-            )
-            db.session.add(item)
-            db.session.commit()
-            return item
+            with current_app.app_context():
+                item = StockItem(
+                    name=name,
+                    description=description,
+                    cost=cost,
+                    list_price=list_price,
+                    quantity=quantity
+                )
+                db.session.add(item)
+                db.session.commit()
+                return item
         except SQLAlchemyError as e:
             db.session.rollback()
             raise Exception(f"Failed to create stock item: {str(e)}")
@@ -35,7 +37,8 @@ class InventoryService:
     @staticmethod
     def get_stock_item(item_id: int) -> Optional[StockItem]:
         """Get a stock item by ID."""
-        return StockItem.query.get(item_id)
+        with current_app.app_context():
+            return StockItem.query.get(item_id)
     
     @staticmethod
     def update_stock_item(
@@ -44,17 +47,18 @@ class InventoryService:
     ) -> Optional[StockItem]:
         """Update a stock item."""
         try:
-            item = StockItem.query.get(item_id)
-            if not item:
-                return None
+            with current_app.app_context():
+                item = StockItem.query.get(item_id)
+                if not item:
+                    return None
                 
-            for key, value in updates.items():
-                if hasattr(item, key):
-                    setattr(item, key, value)
-            
-            item.updated_at = datetime.utcnow()
-            db.session.commit()
-            return item
+                for key, value in updates.items():
+                    if hasattr(item, key):
+                        setattr(item, key, value)
+                
+                item.updated_at = datetime.utcnow()
+                db.session.commit()
+                return item
         except SQLAlchemyError as e:
             db.session.rollback()
             raise Exception(f"Failed to update stock item: {str(e)}")
@@ -63,13 +67,14 @@ class InventoryService:
     def delete_stock_item(item_id: int) -> bool:
         """Delete a stock item."""
         try:
-            item = StockItem.query.get(item_id)
-            if not item:
-                return False
+            with current_app.app_context():
+                item = StockItem.query.get(item_id)
+                if not item:
+                    return False
                 
-            db.session.delete(item)
-            db.session.commit()
-            return True
+                db.session.delete(item)
+                db.session.commit()
+                return True
         except SQLAlchemyError as e:
             db.session.rollback()
             raise Exception(f"Failed to delete stock item: {str(e)}")
@@ -82,43 +87,45 @@ class InventoryService:
         in_stock: bool = False
     ) -> List[StockItem]:
         """List stock items with optional filtering."""
-        query = StockItem.query
-        
-        if search:
-            query = query.filter(
-                or_(
-                    StockItem.name.ilike(f"%{search}%"),
-                    StockItem.description.ilike(f"%{search}%")
+        with current_app.app_context():
+            query = StockItem.query
+            
+            if search:
+                query = query.filter(
+                    or_(
+                        StockItem.name.ilike(f"%{search}%"),
+                        StockItem.description.ilike(f"%{search}%")
+                    )
                 )
-            )
-            
-        if min_price is not None:
-            query = query.filter(StockItem.list_price >= min_price)
-            
-        if max_price is not None:
-            query = query.filter(StockItem.list_price <= max_price)
-            
-        if in_stock:
-            query = query.filter(StockItem.quantity > 0)
-            
-        return query.order_by(StockItem.name).all()
+                
+            if min_price is not None:
+                query = query.filter(StockItem.list_price >= min_price)
+                
+            if max_price is not None:
+                query = query.filter(StockItem.list_price <= max_price)
+                
+            if in_stock:
+                query = query.filter(StockItem.quantity > 0)
+                
+            return query.order_by(StockItem.name).all()
     
     @staticmethod
     def update_inventory(item_id: int, quantity_change: int) -> Optional[StockItem]:
         """Update the inventory quantity of a stock item."""
         try:
-            item = StockItem.query.get(item_id)
-            if not item:
-                return None
+            with current_app.app_context():
+                item = StockItem.query.get(item_id)
+                if not item:
+                    return None
                 
-            new_quantity = item.quantity + quantity_change
-            if new_quantity < 0:
-                raise ValueError("Insufficient stock")
+                new_quantity = item.quantity + quantity_change
+                if new_quantity < 0:
+                    raise ValueError("Insufficient stock")
                 
-            item.quantity = new_quantity
-            item.updated_at = datetime.utcnow()
-            db.session.commit()
-            return item
+                item.quantity = new_quantity
+                item.updated_at = datetime.utcnow()
+                db.session.commit()
+                return item
         except SQLAlchemyError as e:
             db.session.rollback()
             raise Exception(f"Failed to update inventory: {str(e)}")
