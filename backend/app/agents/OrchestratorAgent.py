@@ -339,6 +339,7 @@ class OrchestratorAgent:
             try:
                 parsed = json.loads(content)
                 print(f"[orchestrator] Parsed LLM response: {parsed}")
+                print(f"[orchestrator] Parsed LLM response type: {type(parsed)}")
                 if isinstance(parsed, list):
                     items = parsed
                 elif isinstance(parsed, dict):
@@ -348,6 +349,10 @@ class OrchestratorAgent:
                         if isinstance(v, list):
                             items = v
                             break
+                    # If dict is a single item, wrap in list
+                    if not items and 'name' in parsed and 'quantity' in parsed:
+                        print("[orchestrator] Single item dict detected, wrapping in list.")
+                        items = [parsed]
             except Exception as parse_exc:
                 print(f"[orchestrator] Exception parsing LLM response: {parse_exc}")
         except Exception as e:
@@ -373,10 +378,38 @@ class OrchestratorAgent:
         yield {"is_task_complete": False, "require_user_input": False, "content": f"Order created: {order_id}"}
         # 3. Add each item to the cart
         add_results = []
+        items_added = []
+        items_not_found = []
         for item in items:
             add_args = {"stock_item_id": item.get("id") or item.get("name"), "quantity": item.get("quantity", 1), "cart": [{"id": order_id}]}
             result = await self.call_tool([{"name": "add_to_cart", "arguments": add_args}])
             add_results.append(result)
+            # Parse result for success/failure
+            try:
+                msg = json.loads(result[0].get('result', '{}')).get('msg', '')
+                if 'added to cart' in msg:
+                    items_added.append(item)
+                else:
+                    items_not_found.append(item)
+            except Exception:
+                items_not_found.append(item)
             yield {"is_task_complete": False, "require_user_input": False, "content": f"Added to cart: {json.dumps(add_args)}\nResult: {result}"}
-        # 4. Yield a summary
-        yield {"is_task_complete": True, "require_user_input": False, "content": f"Order {order_id} created. Items added: {len(items)}.\nOrder workflow complete."}
+        # 4. Mark order as 'ready'
+        print(f"[orchestrator] Marking order {order_id} as 'ready'...")
+        from app.storefront.services.order import OrderService
+        from app.agents.MCP.server import app
+        with app.app_context():
+            status_updated = OrderService.update_order_status(order_id, 'ready')
+        print(f"[orchestrator] Order status updated: {status_updated}")
+        # 5. Yield a summary
+        summary = f"Order {order_id} created.\n"
+        summary += f"Items added: {len(items_added)}\n"
+        for item in items_added:
+            summary += f"  - {item.get('name')} (qty: {item.get('quantity', 1)})\n"
+        if items_not_found:
+            summary += f"Items not found or not added: {len(items_not_found)}\n"
+            for item in items_not_found:
+                summary += f"  - {item.get('name')} (qty: {item.get('quantity', 1)})\n"
+        summary += f"Order status: {'ready' if status_updated else 'draft'}\nOrder workflow complete."
+        print(f"[orchestrator] Summary:\n{summary}")
+        yield {"is_task_complete": True, "require_user_input": False, "content": summary}

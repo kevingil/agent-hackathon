@@ -29,6 +29,7 @@ with app.app_context():
     )
     def add_to_cart(stock_item_id: str | int, quantity: int, cart) -> str:
         print(f"[add_to_cart] Received cart argument: {cart}")
+        print(f"[add_to_cart] Received stock_item_id argument: {stock_item_id}")
         if not cart:
             result = {"msg": "Cart is empty"}
             print("[add_to_cart] Result:", json.dumps(result, indent=2))
@@ -52,8 +53,25 @@ with app.app_context():
             print(f"[add_to_cart] Using order_id: {order_id}")
             if not order_id:
                 raise ValueError("Could not extract order_id from cart argument")
+            # If stock_item_id is not an int, look up by name
+            from app.storefront.models import StockItem
+            from app.storefront.services.inventory import InventoryService
+            stock_id = stock_item_id
+            if isinstance(stock_item_id, str):
+                print(f"[add_to_cart] Looking up StockItem by name: {stock_item_id}")
+                item = StockItem.query.filter_by(name=stock_item_id).first()
+                if not item:
+                    print(f"[add_to_cart] No exact match for '{stock_item_id}', trying fuzzy/keyword search...")
+                    matches = InventoryService.list_stock_items(search=stock_item_id)
+                    if matches:
+                        item = matches[0]
+                        print(f"[add_to_cart] Fuzzy match found: {item.name} (id={item.id})")
+                    else:
+                        raise ValueError(f"Stock item with name or keyword '{stock_item_id}' not found")
+                stock_id = item.id
+                print(f"[add_to_cart] Found StockItem id: {stock_id}")
             order_service.add_item_to_cart(
-                order_id=order_id, stock_item_id=stock_item_id, quantity=quantity
+                order_id=order_id, stock_item_id=stock_id, quantity=quantity
             )
             result = {"msg": f"Item {stock_item_id} added to cart"}
             print("[add_to_cart] Result:", json.dumps(result, indent=2))

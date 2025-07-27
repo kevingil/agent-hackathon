@@ -251,6 +251,23 @@ class OrderService:
             return query.order_by(Order.created_at.desc()).offset(offset).limit(limit).all()
 
     @staticmethod
+    def update_order_status(order_id: int, status: str) -> bool:
+        """Update the status of an order by id."""
+        try:
+            with current_app.app_context():
+                order = Order.query.get(order_id)
+                if not order:
+                    return False
+                order.status = status
+                order.updated_at = datetime.utcnow()
+                db.session.commit()
+                return True
+        except Exception as e:
+            db.session.rollback()
+            print(f"[OrderService] Error updating order status: {e}")
+            return False
+
+    @staticmethod
     def _update_order_totals(order: Order) -> None:
         """Update the order totals based on its items."""
         with current_app.app_context():
