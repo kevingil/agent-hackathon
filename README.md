@@ -1,4 +1,4 @@
-# OrderMail AI
+# OrderMail Agent
 
 This project features an agentic workflow for automated order processing from natural language emails. The system uses a combination of LLMs (OpenAI GPT), a tool orchestration framework, and a backend service to extract, match, and process orders end-to-end.
 
