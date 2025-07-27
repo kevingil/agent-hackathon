@@ -52,5 +52,7 @@ def create_app():
     # Register blueprints
     from app.user.controllers import users as users_blueprint
     app.register_blueprint(users_blueprint, url_prefix='/api/users')
+    from app.storefront.controllers import orders as orders_blueprint
+    app.register_blueprint(orders_blueprint)
     
     return app

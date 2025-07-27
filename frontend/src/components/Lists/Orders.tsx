@@ -1,43 +1,22 @@
 import { useState, useEffect } from "react";
 import OrderCard from "../ListItems/OrderCard";
 import type { Order } from "../../types/Order";
-// import { getOrders } from "../../api/orders";
+import { getOrders } from "../../api/orders";
 
 const Orders = () => {
   const [orders, setOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState<boolean>();
-
-  const sample_orders: Order[] = [
-    {
-      id: 1,
-      name: "Order A",
-      description: "Description for Order A",
-      cost: "10.00",
-      list_price: "12.00",
-      quantity: "2",
-      created_at: "2025-07-25T12:00:00Z",
-      updated_at: "2025-07-25T13:00:00Z",
-    },
-    {
-      id: 2,
-      name: "Order B",
-      description: "Description for Order B",
-      cost: "15.00",
-      list_price: "18.00",
-      quantity: "3",
-      created_at: "2025-07-24T10:30:00Z",
-      updated_at: "2025-07-24T11:00:00Z",
-    },
-  ];
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchOrders = async () => {
       setLoading(true);
-
+      setError(null);
       try {
-        setOrders(sample_orders);
-      } catch (error) {
-        console.log(`error ${error}`);
+        const data = await getOrders();
+        setOrders(data);
+      } catch (error: unknown) {
+        setError(error instanceof Error ? error.message : "Failed to fetch orders");
       } finally {
         setLoading(false);
       }
@@ -46,10 +25,14 @@ const Orders = () => {
   }, []);
 
   return (
-    <div className=" ">
+    <div>
       {loading ? (
         <div className="text-center">
           <h2>Loading...</h2>
+        </div>
+      ) : error ? (
+        <div className="text-center text-red-500">
+          <h2>{error}</h2>
         </div>
       ) : orders.length === 0 ? (
         <div className="text-center">

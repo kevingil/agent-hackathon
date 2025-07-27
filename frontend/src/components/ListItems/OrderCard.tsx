@@ -8,41 +8,43 @@ const OrderCard: React.FC<OrderProps> = ({ order }) => {
     <Card style={{ width: "100%" }} className="mb-4">
       <Card.Body>
         <Card.Title>
-          {" "}
-          <strong>Order Name: </strong>
-          {order.name}
+          <strong>Order ID: </strong>
+          {order.id}
         </Card.Title>
+        <Row className="mb-2">
+          <Col md={4}><strong>Status:</strong> {order.status}</Col>
+          <Col md={4}><strong>Total Amount:</strong> ${order.total_amount.toFixed(2)}</Col>
+        </Row>
+        <Row className="mb-2">
+          <Col md={4}><strong>Created At:</strong> {order.created_at}</Col>
+          <Col md={4}><strong>Updated At:</strong> {order.updated_at}</Col>
+        </Row>
+        {order.items && order.items.length > 0 && (
+          <div className="mt-3">
+            <h5>Order Items</h5>
+            <table className="table table-sm">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Quantity</th>
+                  <th>Unit Price</th>
+                  <th>Total Price</th>
+                </tr>
+              </thead>
+              <tbody>
+                {order.items.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.name}</td>
+                    <td>{item.quantity}</td>
+                    <td>${item.unit_price.toFixed(2)}</td>
+                    <td>${item.total_price.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card.Body>
-      <Row className="justify-content-center">
-        <Col md={2}>
-          <strong>Description:</strong>
-        </Col>
-        <Col md={4}>{order.description}</Col>
-        <Col md={2}>
-          <strong>Cost:</strong>
-        </Col>
-        <Col md={4}>{order.cost}</Col>
-      </Row>
-      <Row className="justify-content-center">
-        <Col md={2}>
-          <strong>List Price:</strong>
-        </Col>
-        <Col md={4}>{order.list_price}</Col>
-        <Col md={2}>
-          <strong>Quantity:</strong>
-        </Col>
-        <Col md={4}>{order.quantity}</Col>
-      </Row>
-      <Row className="justify-content-center">
-        <Col md={2}>
-          <strong>Created At:</strong>
-        </Col>
-        <Col md={4}>{order.created_at}</Col>
-        <Col md={2}>
-          <strong>Updated At:</strong>
-        </Col>
-        <Col md={4}>{order.updated_at}</Col>
-      </Row>
     </Card>
   );
 };
