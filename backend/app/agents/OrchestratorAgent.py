@@ -322,8 +322,8 @@ class OrchestratorAgent:
         print("\n[orchestrator] Extracting order items from email...")
         extract_items_prompt = (
             "Extract a list of order items from the following email. "
-            "Return only a JSON array of objects, each with: 'name' (str, required), 'quantity' (int, required), and optionally 'id' (int or str) and 'details' (str). "
-            "No explanation, only the JSON array.\nEMAIL:\n" + question
+            "Return a JSON object with a single key 'items', whose value is an array of objects, each with: 'name' (str, required), 'quantity' (int, required), and optionally 'id' (int or str) and 'details' (str). "
+            "No explanation, only the JSON object.\nEMAIL:\n" + question
         )
         # Use OpenAI's response_format structured output
         items = []
@@ -340,19 +340,10 @@ class OrchestratorAgent:
                 parsed = json.loads(content)
                 print(f"[orchestrator] Parsed LLM response: {parsed}")
                 print(f"[orchestrator] Parsed LLM response type: {type(parsed)}")
-                if isinstance(parsed, list):
-                    items = parsed
-                elif isinstance(parsed, dict):
-                    # Try to find the list in a key
-                    for k, v in parsed.items():
-                        print(f"[orchestrator] Checking key '{k}': {v}")
-                        if isinstance(v, list):
-                            items = v
-                            break
-                    # If dict is a single item, wrap in list
-                    if not items and 'name' in parsed and 'quantity' in parsed:
-                        print("[orchestrator] Single item dict detected, wrapping in list.")
-                        items = [parsed]
+                if isinstance(parsed, dict) and 'items' in parsed and isinstance(parsed['items'], list):
+                    items = parsed['items']
+                else:
+                    print("[orchestrator] No 'items' key or not a list in LLM response.")
             except Exception as parse_exc:
                 print(f"[orchestrator] Exception parsing LLM response: {parse_exc}")
         except Exception as e:
@@ -381,23 +372,52 @@ class OrchestratorAgent:
         items_added = []
         items_not_found = []
         for item in items:
-            add_args = {"stock_item_id": item.get("id") or item.get("name"), "quantity": item.get("quantity", 1), "cart": [{"id": order_id}]}
+            # Try full name/id first
+            stock_item_id = item.get("id") or item.get("name")
+            quantity = item.get("quantity", 1)
+            add_args = {"stock_item_id": stock_item_id, "quantity": quantity, "cart": [{"id": order_id}]}
             result = await self.call_tool([{"name": "add_to_cart", "arguments": add_args}])
             add_results.append(result)
-            # Parse result for success/failure
             try:
                 msg = json.loads(result[0].get('result', '{}')).get('msg', '')
                 if 'added to cart' in msg:
                     items_added.append(item)
-                else:
-                    items_not_found.append(item)
+                    yield {"is_task_complete": False, "require_user_input": False, "content": f"Added to cart: {json.dumps(add_args)}\nResult: {result}"}
+                    continue
             except Exception:
+                pass
+            # Fallback: try find_inventory with first 2 words, then 1 word
+            name = item.get("name", "")
+            words = name.split()
+            tried_keywords = set()
+            for n_words in [2, 1]:
+                if len(words) >= n_words:
+                    keyword = " ".join(words[:n_words])
+                    if keyword in tried_keywords:
+                        continue
+                    tried_keywords.add(keyword)
+                    find_result = await self.call_tool([{"name": "find_inventory", "arguments": {"keyword": keyword, "min_price": 0, "max_price": 1e9}}])
+                    try:
+                        inventory = json.loads(find_result[0].get('result', '[]'))
+                        if isinstance(inventory, list) and inventory:
+                            best_match = inventory[0]
+                            best_id = best_match.get("id")
+                            add_fuzzy_args = {"stock_item_id": best_id, "quantity": quantity, "cart": [{"id": order_id}]}
+                            add_fuzzy = await self.call_tool([{"name": "add_to_cart", "arguments": add_fuzzy_args}])
+                            fuzzy_msg = json.loads(add_fuzzy[0].get('result', '{}')).get('msg', '')
+                            if 'added to cart' in fuzzy_msg:
+                                items_added.append(item)
+                                yield {"is_task_complete": False, "require_user_input": False, "content": f"Fuzzy add to cart: {json.dumps(add_fuzzy_args)}\nResult: {add_fuzzy}"}
+                                break
+                    except Exception:
+                        pass
+            else:
                 items_not_found.append(item)
-            yield {"is_task_complete": False, "require_user_input": False, "content": f"Added to cart: {json.dumps(add_args)}\nResult: {result}"}
+                yield {"is_task_complete": False, "require_user_input": False, "content": f"Item not found after all attempts: {name}"}
         # 4. Mark order as 'ready'
         print(f"[orchestrator] Marking order {order_id} as 'ready'...")
-        from app.storefront.services.order import OrderService
-        from app.agents.MCP.server import app
+        from ..storefront.services.order import OrderService
+        from .MCP.server import app
         with app.app_context():
             status_updated = OrderService.update_order_status(order_id, 'ready')
         print(f"[orchestrator] Order status updated: {status_updated}")

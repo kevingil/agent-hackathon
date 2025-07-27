@@ -11,7 +11,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 from openai import OpenAI
 
@@ -115,21 +115,20 @@ def mark_email_processed(email_path: str, status: str = "completed") -> None:
     except Exception as e:
         logger.error(f"Error saving processed emails: {str(e)}")
 
-async def process_email_file(agent: OrchestratorAgent, file_path: Path) -> bool:
+# Remove process_order_items and update process_email_file to use agent.stream
+
+async def process_email_file(agent: OrchestratorAgent, mcp_client: MCPClient, file_path: Path) -> bool:
     """
-    Process a single email file and place orders based on its content.
-    
+    Process a single email file and place orders based on its content using the agentic workflow.
     Args:
         agent: Initialized OrchestratorAgent
+        mcp_client: Initialized MCPClient
         file_path: Path to the email file to process
-        
     Returns:
         bool: True if processing was successful, False otherwise
     """
     try:
         logger.info(f"Starting to process email file: {file_path}")
-        
-        # Read the email content with error handling
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 email_content = f.read()
@@ -138,60 +137,30 @@ async def process_email_file(agent: OrchestratorAgent, file_path: Path) -> bool:
             logger.error(f"Failed to read email file {file_path}: {str(e)}", exc_info=True)
             mark_email_processed(str(file_path), f"read_error: {str(e)}")
             return False
-            
         print(f"\n{'='*80}\nProcessing email: {file_path.name}\n{'='*80}")
-        
         try:
-            # Process the email with the agent
+            # Use the agentic workflow: pass the full email to the agent's stream method
             result = None
-            logger.info("Starting to process email with agent...")
-            
-            try:
-                async for chunk in agent.stream(email_content):
-                    if 'content' in chunk and chunk['content']:
-                        print(chunk['content'], end='', flush=True)
-                    
-                    if chunk.get('is_task_complete', False):
-                        result = chunk
-                        logger.info("Received task completion signal from agent")
-                        break
-                
-                # Log tool execution history if available
-                if result:
-                    logger.info(f"Agent processing completed. Result keys: {list(result.keys())}")
-                    if 'tool_history' in result and result['tool_history']:
-                        logger.info(f"Tool history length: {len(result['tool_history'])}")
-                        print("\n\nTool execution summary:")
-                        print("-" * 40)
-                        for i, tool in enumerate(result['tool_history'], 1):
-                            status = "✓" if not tool.get('isError', False) else "✗"
-                            logger.info(f"Tool {i}: {tool.get('tool', 'unknown')}, Success: {status}")
-                            print(f"{status} {tool.get('tool', 'unknown')}({tool.get('arguments', '')})")
-                            if tool.get('result'):
-                                print(f"   → {tool['result']}")
-                    
-                    # Check for errors in the result
-                    if result.get('error'):
-                        logger.error(f"Agent reported an error: {result.get('error')}")
-                        mark_email_processed(str(file_path), f"agent_error: {result.get('error')}")
-                        return False
-                
-                # Mark the email as processed
+            async for chunk in agent.stream(email_content):
+                if 'content' in chunk and chunk['content']:
+                    print(chunk['content'], end='\n', flush=True)
+                if chunk.get('is_task_complete', False):
+                    result = chunk
+                    logger.info("Agentic workflow complete.")
+                    break
+            if result and result.get("content") and "order" in result.get("content").lower():
                 mark_email_processed(str(file_path), "completed")
                 logger.info(f"Successfully processed email: {file_path.name}")
                 print(f"\n{'='*80}\nSuccessfully processed: {file_path.name}\n{'='*80}")
                 return True
-                
-            except Exception as stream_error:
-                logger.error(f"Error during agent stream processing: {str(stream_error)}", exc_info=True)
-                mark_email_processed(str(file_path), f"stream_error: {str(stream_error)}")
+            else:
+                logger.warning(f"Agentic workflow did not complete successfully for: {file_path.name}")
+                mark_email_processed(str(file_path), "agentic_incomplete")
                 return False
-                
         except Exception as process_error:
-            logger.error(f"Error in email processing: {str(process_error)}", exc_info=True)
+            logger.error(f"Error in agentic email processing: {str(process_error)}", exc_info=True)
             mark_email_processed(str(file_path), f"process_error: {str(process_error)}")
             return False
-            
     except Exception as e:
         logger.critical(f"Unexpected error in process_email_file: {str(e)}", exc_info=True)
         mark_email_processed(str(file_path), f"unexpected_error: {str(e)}")
@@ -244,7 +213,7 @@ async def process_emails(directory: Optional[Path] = None) -> None:
         logger.info(f"Processing email: {email_to_process.name}")
         
         # Process the email
-        success = await process_email_file(agent, email_to_process)
+        success = await process_email_file(agent, mcp_client, email_to_process)
         
         if success:
             logger.info(f"Successfully processed email: {email_to_process.name}")
