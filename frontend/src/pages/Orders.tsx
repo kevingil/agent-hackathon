@@ -1,0 +1,152 @@
+import { useState, useEffect } from "react";
+import { getOrders } from "../api/orders";
+import type { Order } from "../types/Order";
+
+const OrdersPage = () => {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [status, setStatus] = useState<string>("ready");
+  const [search, setSearch] = useState<string>("");
+
+  const fetchOrders = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await getOrders();
+      setOrders(data);
+      if (data.length > 0 && selected === null) setSelected(data[0].id);
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "Failed to fetch orders");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchOrders();
+    // eslint-disable-next-line
+  }, [status]);
+
+  const filteredOrders = orders.filter(
+    (order) =>
+      (!status || order.status === status) &&
+      (!search || order.id.toString().includes(search) || (order.items && order.items.some(item => item.name.toLowerCase().includes(search.toLowerCase()))))
+  );
+
+  const selectedOrder = filteredOrders.find((o) => o.id === selected) || filteredOrders[0];
+
+  return (
+    <div style={{ display: "flex", height: "calc(100vh - 80px)", background: "#f7f8fa" }}>
+      {/* Sidebar */}
+      <div style={{ width: 320, background: "#fff", borderRight: "1px solid #eee", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: 20, borderBottom: "1px solid #eee", background: "#fafbfc" }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <select value={status} onChange={e => setStatus(e.target.value)} style={{ padding: 6, borderRadius: 4, flex: 1 }}>
+              <option value="">All</option>
+              <option value="ready">Ready</option>
+              <option value="submitted">Submitted</option>
+              <option value="processing">Processing</option>
+              <option value="shipped">Shipped</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <input
+              type="text"
+              placeholder="Search orders..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{ padding: 6, borderRadius: 4, flex: 2, border: "1px solid #ddd" }}
+            />
+            <button onClick={fetchOrders} style={{ padding: "6px 12px", borderRadius: 4, border: "none", background: "#007bff", color: "#fff", fontWeight: 600, cursor: "pointer" }}>⟳</button>
+          </div>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto" }}>
+          {loading ? (
+            <div style={{ textAlign: "center", margin: 40 }}><h2>Loading...</h2></div>
+          ) : error ? (
+            <div style={{ textAlign: "center", color: "red", margin: 40 }}><h2>{error}</h2></div>
+          ) : filteredOrders.length === 0 ? (
+            <div style={{ textAlign: "center", margin: 40 }}><h2>No Orders</h2></div>
+          ) : (
+            <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {filteredOrders.map(order => (
+                <li
+                  key={order.id}
+                  onClick={() => setSelected(order.id)}
+                  style={{
+                    padding: "16px 20px",
+                    borderBottom: "1px solid #f0f0f0",
+                    background: selected === order.id ? "#e9f2ff" : undefined,
+                    cursor: "pointer",
+                    fontWeight: selected === order.id ? 700 : 500,
+                    color: selected === order.id ? "#007bff" : "#222"
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>#{order.id}</span>
+                    <span style={{ fontSize: 13, color: "#888" }}>{order.status}</span>
+                  </div>
+                  <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>
+                    Total: ${order.total_amount.toFixed(2)}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+      {/* Main Details Panel */}
+      <div style={{ flex: 1, background: "#f7f8fa", padding: 40, overflowY: "auto" }}>
+        {selectedOrder ? (
+          <div style={{ background: "#fff", borderRadius: 10, boxShadow: "0 2px 8px rgba(0,0,0,0.04)", padding: 32, minHeight: 300 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+              <h2 style={{ fontWeight: 700, fontSize: 28, margin: 0 }}>Order #{selectedOrder.id}</h2>
+              <span style={{ fontWeight: 600, color: "#007bff", fontSize: 18 }}>{selectedOrder.status}</span>
+            </div>
+            <div style={{ display: "flex", gap: 40, marginBottom: 24 }}>
+              <div>
+                <div style={{ fontSize: 15, color: "#888" }}>Created</div>
+                <div style={{ fontWeight: 600 }}>{selectedOrder.created_at}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 15, color: "#888" }}>Updated</div>
+                <div style={{ fontWeight: 600 }}>{selectedOrder.updated_at}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 15, color: "#888" }}>Total</div>
+                <div style={{ fontWeight: 600 }}>${selectedOrder.total_amount.toFixed(2)}</div>
+              </div>
+            </div>
+            <div>
+              <h4 style={{ fontWeight: 600, marginBottom: 12 }}>Order Items</h4>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ padding: 8, textAlign: "left", color: "#888", fontWeight: 600 }}>Name</th>
+                    <th style={{ padding: 8, textAlign: "left", color: "#888", fontWeight: 600 }}>Quantity</th>
+                    <th style={{ padding: 8, textAlign: "left", color: "#888", fontWeight: 600 }}>Unit Price</th>
+                    <th style={{ padding: 8, textAlign: "left", color: "#888", fontWeight: 600 }}>Total Price</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedOrder.items.map(item => (
+                    <tr key={item.id}>
+                      <td style={{ padding: 8 }}>{item.name}</td>
+                      <td style={{ padding: 8 }}>{item.quantity}</td>
+                      <td style={{ padding: 8 }}>${item.unit_price.toFixed(2)}</td>
+                      <td style={{ padding: 8 }}>${item.total_price.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+};
+
+export default OrdersPage; 
