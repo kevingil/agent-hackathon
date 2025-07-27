@@ -8,6 +8,7 @@ import PrivateRoute from "./components/PrivateRoute";
 import Footer from "./components/Layout/Footer";
 import FollowersPage from "./pages/Followers";
 import NewPostPage from "./pages/NewPostPage";
+import OrdersPage from "./pages/Orders";
 // import N
 
 function App() {
@@ -17,6 +18,7 @@ function App() {
       <main className="main-content">
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route path="/orders" element={<OrdersPage />} />
           <Route
             path="/login"
             element={
