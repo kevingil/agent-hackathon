@@ -46,10 +46,6 @@ async def initialize_agent_service() -> Tuple[OrchestratorAgent, MCPClient]:
         tools = await mcp_client.get_tools()
         logger.info(f"Loaded {len(tools)} tools from MCP")
         
-        # Log the structure of the first tool for debugging
-        if tools:
-            logger.info(f"First tool structure: {json.dumps(tools[0], indent=2) if isinstance(tools[0], dict) else str(tools[0])}")
-        
         logger.info("Initializing OpenAI client...")
         openai_client = OpenAI()
         
@@ -63,9 +59,7 @@ async def initialize_agent_service() -> Tuple[OrchestratorAgent, MCPClient]:
             
         logger.info("Initializing OrchestratorAgent...")
         logger.info(f"Number of tools: {len(tools)}")
-        if tools:
-            logger.info(f"First tool structure: {json.dumps(tools[0], indent=2) if isinstance(tools[0], dict) else str(tools[0])}")
-        
+
         try:
             # Create a copy of tools to avoid modifying the original
             agent_tools = [tool.copy() if hasattr(tool, 'copy') else tool for tool in tools]

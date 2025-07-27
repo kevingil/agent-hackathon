@@ -12,18 +12,18 @@ class OrderService:
     """Service for handling order and cart operations."""
 
     @staticmethod
-    def create_order(user_id: Optional[int] = None, **kwargs) -> Order:
+    def create_order(**kwargs) -> Order:
         """Create a new order (cart)."""
         try:
             with current_app.app_context():
                 order = Order(
-                    user_id=user_id,
                     status="draft",  # Start as draft (cart)
                     total_amount=Decimal("0.00"),
                     **kwargs,
                 )
                 db.session.add(order)
                 db.session.commit()
+                db.session.refresh(order)  # Ensure order is attached to session
                 return order
         except SQLAlchemyError as e:
             db.session.rollback()

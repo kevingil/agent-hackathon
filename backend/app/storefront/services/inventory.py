@@ -86,10 +86,9 @@ class InventoryService:
         max_price: Optional[float] = None,
         in_stock: bool = False
     ) -> List[StockItem]:
-        """List stock items with optional filtering."""
+        """List stock items with optional filtering and fuzzy search."""
         with current_app.app_context():
             query = StockItem.query
-            
             if search:
                 query = query.filter(
                     or_(
@@ -97,17 +96,31 @@ class InventoryService:
                         StockItem.description.ilike(f"%{search}%")
                     )
                 )
-                
             if min_price is not None:
                 query = query.filter(StockItem.list_price >= min_price)
-                
             if max_price is not None:
                 query = query.filter(StockItem.list_price <= max_price)
-                
             if in_stock:
                 query = query.filter(StockItem.quantity > 0)
-                
-            return query.order_by(StockItem.name).all()
+            results = query.order_by(StockItem.name).all()
+            # Fuzzy match fallback if no results
+            if search and not results:
+                from difflib import get_close_matches
+                all_items = StockItem.query.all()
+                names = [item.name for item in all_items]
+                descs = [item.description or '' for item in all_items]
+                close_names = get_close_matches(search, names, n=5, cutoff=0.5)
+                close_descs = get_close_matches(search, descs, n=5, cutoff=0.5)
+                matched = [item for item in all_items if item.name in close_names or (item.description and item.description in close_descs)]
+                # Apply price/in_stock filters to fuzzy matches
+                if min_price is not None:
+                    matched = [item for item in matched if float(item.list_price) >= min_price]
+                if max_price is not None:
+                    matched = [item for item in matched if float(item.list_price) <= max_price]
+                if in_stock:
+                    matched = [item for item in matched if item.quantity > 0]
+                return matched
+            return results
     
     @staticmethod
     def update_inventory(item_id: int, quantity_change: int) -> Optional[StockItem]:

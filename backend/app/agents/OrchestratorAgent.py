@@ -241,7 +241,7 @@ class OrchestratorAgent:
         print(f"[extract_tools] Extracting {len(tool_calls)} tool calls...")
         internal_calls = []
         for i, call in enumerate(tool_calls):
-            print(f"[extract_tools] Tool call {i} type: {type(call)} dir: {dir(call)}")
+            #print(f"[extract_tools] Tool call {i} type: {type(call)} dir: {dir(call)}")
             # OpenAI object: has attribute 'function'
             if hasattr(call, 'function'):
                 fn = call.function
@@ -279,6 +279,15 @@ class OrchestratorAgent:
         try:
             from .PlannerAgent import PlannerAgent
             planner = PlannerAgent(self.dev_prompt, self.mcp_client, [], self.tools, self.model_name)
+            # Add a system message to reinforce workflow
+            workflow_msg = (
+                "SYSTEM: Workflow for order requests: "
+                "1) Always create an order first if one does not exist. "
+                "2) Add items to cart. "
+                "3) Only use find_inventory if add_to_cart fails for a specific item. "
+                "Do NOT call find_inventory for every item up front."
+            )
+            planner.messages.append({"role": "system", "content": workflow_msg})
             result = planner.run(question)
             # Directly yield the tool_calls list (may be OpenAI objects)
             yield result.get('tool_calls', [])
@@ -308,112 +317,63 @@ class OrchestratorAgent:
         return f"✅ {name} succeeded: {result_text}"
 
     async def stream(self, question: str) -> AsyncGenerator[dict, None]:
-        """Stream the process of answering a question, possibly involving tool calls."""
-        called_tools = []
-        for i in range(10):
-            # Print step header
-            step_header = f"\n{'='*80}\nStep {i+1}\n{'='*80}"
-            yield {
-                "is_task_complete": False,
-                "require_user_input": False,
-                "content": step_header,
-            }
-            print(step_header)
-
-            # Collect response chunks
-            response_chunks = []
-            print("\n🤖 Processing response...")
-            tool_call_list = None
-            async for chunk in self.decide(question, called_tools):
-                # If decide yields a list (tool calls), use it directly
-                if isinstance(chunk, list):
-                    tool_call_list = chunk
-                else:
-                    # Extract text from ResponseCreatedEvent if needed
-                    chunk_text = getattr(chunk, 'text', str(chunk))
-                    response_chunks.append(chunk_text)
-                    # Only yield non-empty chunks
-                    if chunk_text.strip():
-                        yield {
-                            "is_task_complete": False,
-                            "require_user_input": False,
-                            "content": chunk_text,
-                        }
-            # For logging, print the raw response
-            if tool_call_list is not None:
-                print("\n📝 Raw response (tool call objects):")
-                print(tool_call_list)
-            else:
-                response = ''.join(response_chunks)
-                print("\n📝 Raw response:")
-                print(response)
-            # Extract tools from response
-            print("\n🛠️  Extracting tools...")
-            # Pass the actual tool call objects if available
-            tools = self.extract_tools(tool_call_list if tool_call_list is not None else response)
-            print(f"[stream] Passed to extract_tools: {type(tool_call_list) if tool_call_list is not None else type(response)}")
-            if isinstance(tools, str):
-                # Handle error case
-                error_msg = f"Error extracting tools: {tools}"
-                print(f"❌ {error_msg}")
-                called_tools.append({
-                    "tool": "orchestrator",
-                    "arguments": {},
-                    "isError": True,
-                    "result": error_msg
-                })
-                break
-            if not tools:
-                print("ℹ️  No tools found in response. Assuming task is complete.")
-                break
-            # Print tool calls
-            print("\n🔧 Tool calls:")
-            for i, tool in enumerate(tools, 1):
-                print(f"{i}. {self._format_tool_call(tool)}")
-            # Call the tools
-            print("\n🚀 Executing tool calls...")
-            results = await self.call_tool(tools)
-            # Process the results
-            print("\n📋 Tool results:")
-            for i, (tool, result) in enumerate(zip(tools, results)):
-                # Handle both string error messages and structured results
-                if isinstance(result, str):
-                    result_text = result
-                    is_error = True
-                else:
-                    # Handle different result formats
-                    if hasattr(result, 'content') and result.content:
-                        if isinstance(result.content, list) and hasattr(result.content[0], 'text'):
-                            result_text = result.content[0].text
-                        else:
-                            result_text = str(result.content[0]) if result.content else str(result)
-                    else:
-                        result_text = str(result)
-                    is_error = result.get('error', False) if isinstance(result, dict) else False
-                # Get tool info
-                tool_name = tool.get('name', f'tool_{i}')
-                # Print formatted result
-                result_display = self._format_tool_result({
-                    'name': tool_name,
-                    'error': is_error,
-                    'result': result_text[:200] + ('...' if len(result_text) > 200 else '')
-                })
-                print(f"{i+1}. {result_display}")
-                # Store in called_tools
-                called_tools.append({
-                    "tool": tool_name,
-                    "arguments": tool.get('arguments', {}),
-                    "isError": is_error,
-                    "result": result_text,
-                })
-            called_tools_history = {"question": question, "tools": [], "called_tools": called_tools}
-            yield {
-                "is_task_complete": False,
-                "require_user_input": False,
-                "content": called_tools_history,
-            }
-        yield {
-            "is_task_complete": True,
-            "require_user_input": False,
-            "content": "Task completed",
-        }
+        """Deterministic order workflow: extract items, create order, add items, summarize."""
+        # 1. Extract items from the email using the LLM with response_format structured output
+        print("\n[orchestrator] Extracting order items from email...")
+        extract_items_prompt = (
+            "Extract a list of order items from the following email. "
+            "Return only a JSON array of objects, each with: 'name' (str, required), 'quantity' (int, required), and optionally 'id' (int or str) and 'details' (str). "
+            "No explanation, only the JSON array.\nEMAIL:\n" + question
+        )
+        # Use OpenAI's response_format structured output
+        items = []
+        try:
+            response = self.llm.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "user", "content": extract_items_prompt}],
+                response_format={"type": "json_object"},
+                max_tokens=512,
+            )
+            # The response should be a JSON object with a key like 'items' or just a list
+            content = response.choices[0].message.content
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, list):
+                    items = parsed
+                elif isinstance(parsed, dict):
+                    # Try to find the list in a key
+                    for v in parsed.values():
+                        if isinstance(v, list):
+                            items = v
+                            break
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[orchestrator] Error extracting items: {e}")
+        if not items:
+            yield {"is_task_complete": True, "require_user_input": False, "content": "Could not extract items from email."}
+            return
+        yield {"is_task_complete": False, "require_user_input": False, "content": f"Extracted items: {json.dumps(items, indent=2)}"}
+        # 2. Create the order
+        print("[orchestrator] Creating order...")
+        order_id = None
+        create_order_result = await self.call_tool([{"name": "create_order", "arguments": {}}])
+        if create_order_result and isinstance(create_order_result, list):
+            try:
+                parsed = json.loads(create_order_result[0].get('result', '{}'))
+                order_id = parsed.get('order_id')
+            except Exception:
+                pass
+        if not order_id:
+            yield {"is_task_complete": True, "require_user_input": False, "content": "Failed to create order."}
+            return
+        yield {"is_task_complete": False, "require_user_input": False, "content": f"Order created: {order_id}"}
+        # 3. Add each item to the cart
+        add_results = []
+        for item in items:
+            add_args = {"stock_item_id": item.get("id") or item.get("name"), "quantity": item.get("quantity", 1), "cart": [{"id": order_id}]}
+            result = await self.call_tool([{"name": "add_to_cart", "arguments": add_args}])
+            add_results.append(result)
+            yield {"is_task_complete": False, "require_user_input": False, "content": f"Added to cart: {json.dumps(add_args)}\nResult: {result}"}
+        # 4. Yield a summary
+        yield {"is_task_complete": True, "require_user_input": False, "content": f"Order {order_id} created. Items added: {len(items)}.\nOrder workflow complete."}

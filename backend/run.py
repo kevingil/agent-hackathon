@@ -21,7 +21,6 @@ async def initialize_agent_service():
     
     # Get tools from MCP
     tools = await mcp_client.get_tools()
-    print(f"Loaded {len(tools)} tools from MCP")
     
     # Initialize OpenAI client
     openai_client = OpenAI()
