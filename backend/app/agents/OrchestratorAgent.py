@@ -1,13 +1,8 @@
 import asyncio
 from collections.abc import AsyncGenerator
-from openai import OpenAI
+from openai import OpenAI # type: ignore
 from .MCP.client import MCPClient
-from app.agents.utils.schemas import (
-    CalledToolHistoryResponse, 
-    Plan, 
-    PlannerTask
-)
-from typing import Any
+from typing import Any, Optional
 import json
 
 
@@ -63,27 +58,21 @@ class OrchestratorAgent:
             self.messages.append({"role": "developer", "content": self.dev_prompt})
 
     def select_agent(self, agent_name: str) -> Any | str:
-        """Select the agent to use.
-
-        Args:
-            agent_name (str): The name of the agent.
-
-        Returns:
-            The agent.
-        """
+        """Select the agent to use. Instantiate with required params, no LLM client passed."""
         if agent_name == "OrchestratorAgent":
-            agent = OrchestratorAgent()
+            agent = OrchestratorAgent(self.dev_prompt, self.mcp_client, [], self.tools, self.model_name)
         elif agent_name == "PlannerAgent":
-            agent = OrchestratorAgent()
+            from .PlannerAgent import PlannerAgent
+            agent = PlannerAgent(self.dev_prompt, self.mcp_client, [], self.tools, self.model_name)
         elif agent_name == "ToolAgent":
-            agent = OrchestratorAgent()
+            agent = OrchestratorAgent(self.dev_prompt, self.mcp_client, [], self.tools, self.model_name)
         elif agent_name == "ExecutorAgent":
-            agent = OrchestratorAgent()
+            agent = OrchestratorAgent(self.dev_prompt, self.mcp_client, [], self.tools, self.model_name)
         else:
             agent = f"No available agent found with name: {agent_name}"
         return agent
 
-    def execute(self, plan: Plan):
+    def execute(self, plan: Any):
         """Execute the plan.
 
         Args:
@@ -94,7 +83,7 @@ class OrchestratorAgent:
         """
         responses: dict = {}
         for i in range(len(plan)):
-            task: PlannerTask = plan[i]
+            task: Any = plan[i]
             agent_name = task.assigned_agent
             agent = self.select_agent(agent_name)
 
@@ -102,7 +91,7 @@ class OrchestratorAgent:
             responses[agent_name] = response
         pass
 
-    async def stream_llm(self, prompt: str = None) -> AsyncGenerator[str, None]:
+    async def stream_llm(self, prompt: Optional[str] = None) -> AsyncGenerator[str, None]:
         """Stream LLM response.
 
         Args:
@@ -196,197 +185,107 @@ class OrchestratorAgent:
         return results
 
     def extract_tools(self, response) -> list[dict] | str:
-        """Extract the tool calls from the response.
-
-        Args:
-            response: The response from the LLM (could be string, object with text attribute, or event object)
-
-        Returns:
-            list[dict] | str: List of tool call dicts or error message string
         """
+        Extract tool calls from the response and convert to internal format.
+        Handles:
+        - List of tool call objects (OpenAI or dict)
+        - Dict with 'tool_calls' key
+        - String (try to parse as JSON)
+        Adds detailed debugging output for every step and error.
+        """
+        import json
+        print(f"[extract_tools] Type of response: {type(response)}")
+        print(f"[extract_tools] Repr of response: {repr(response)[:500]}")
         if not response:
+            print("[extract_tools] No response received")
             return "No response received"
-
-        response_text = None
-        
-        # Handle different response types
-        if hasattr(response, 'part') and hasattr(response.part, 'text'):
-            # Handle event object with part.text
-            response_text = response.part.text
-        elif hasattr(response, 'text'):
-            # Handle simple object with text attribute
-            response_text = response.text
+        # If response is a list of tool calls (OpenAI objects or dicts), process directly
+        if isinstance(response, list):
+            print(f"[extract_tools] Response is a list with {len(response)} items.")
+            tool_calls = response
+        # If response is a dict with 'tool_calls'
+        elif isinstance(response, dict) and 'tool_calls' in response:
+            print("[extract_tools] Response is a dict with 'tool_calls' key.")
+            tool_calls = response['tool_calls']
+        # If response is a string, try to parse as JSON
         elif isinstance(response, str):
-            # Handle direct string response
-            response_text = response
-        else:
-            # Try to convert to string as last resort
-            response_text = str(response)
-            
-        # If we still don't have text to process
-        if not response_text:
-            return "No valid response text found"
-            
-        # If the response is already a list of tool calls in OpenAI format, return it
-        if isinstance(response_text, list) and all(isinstance(x, dict) and 'function' in x for x in response_text):
-            # Convert to the format expected by call_tool
-            return [{
-                'name': call['function']['name'],
-                'arguments': json.loads(call['function']['arguments']) if call['function'].get('arguments') else {}
-            } for call in response_text]
-
-        # If the response is a string that looks like JSON, try to parse it
-        if isinstance(response_text, str):
-            response_text = response_text.strip()
-            
-            # First, try to find and extract the innermost JSON object
-            json_objects = []
-            stack = []
-            start_index = -1
-            
-            for i, char in enumerate(response_text):
-                if char == '{':
-                    if not stack:
-                        start_index = i
-                    stack.append(char)
-                elif char == '}':
-                    if stack:
-                        stack.pop()
-                        if not stack and start_index != -1:
-                            json_objects.append(response_text[start_index:i+1])
-                            start_index = -1
-            
-            # Process all found JSON objects
-            for json_str in reversed(json_objects):  # Try most recent (deepest) JSON first
-                try:
-                    response_data = json.loads(json_str)
-                    
-                    # Handle OpenAI tool calls format
-                    if 'tool_calls' in response_data:
-                        return [{
-                            'name': call['function']['name'],
-                            'arguments': json.loads(call['function']['arguments']) if call['function'].get('arguments') else {}
-                        } for call in response_data['tool_calls']]
-                    
-                    # Handle direct function calls format
-                    if 'function' in response_data and 'name' in response_data['function']:
-                        return [{
-                            'name': response_data['function']['name'],
-                            'arguments': json.loads(response_data['function']['arguments']) 
-                                        if response_data['function'].get('arguments') 
-                                        else {}
-                        }]
-                        
-                    # Handle legacy formats for backward compatibility
-                    if 'selected_tools' in response_data and 'thoughts' in response_data:
-                        tool_names = response_data.get('selected_tools', [])
-                        if tool_names:  # Only return if we actually have tools
-                            return [{'name': name, 'arguments': {}} for name in tool_names]
-                    
-                    if 'tools' in response_data and response_data['tools']:
-                        return response_data['tools']
-                        
-                    if 'name' in response_data:
-                        return [response_data]
-                        
-                except json.JSONDecodeError as e:
-                    print(f"JSON decode error: {str(e)}")
-                    continue
-                except Exception as e:
-                    print(f"Error processing JSON: {str(e)}")
-                    continue
-            
-            # If we get here, no valid JSON was found - try regex as fallback
+            # Defensive: if it's a Python repr of tool call objects, don't try to parse as JSON
+            if response.strip().startswith("[") and "ChatCompletionMessageToolCall" in response:
+                print("[extract_tools] WARNING: Response is a string repr of tool call objects, not JSON. This is a bug upstream.")
+                return "Tool calls were passed as a string repr, not as objects. Pass the actual list of tool call objects."
             try:
-                import re
-                # Match both new and old formats
-                tool_pattern = r'(?:\"name\"\s*:\s*\"([^\"]+)\"[^}]*\"arguments\"\s*:\s*({[^}]*})|\"function\"\s*:\s*{\s*\"name\"\s*:\s*\"([^\"]+)\"[^}]*\"arguments\"\s*:\s*\"({[^\"]*})\"|\b(\w+)\s*\(([^)]*)\))'
-                matches = re.finditer(tool_pattern, response_text)
-                
-                tool_calls = []
-                for match in matches:
-                    try:
-                        args = {}
-                        # Try new format first (function/name/arguments)
-                        if match.group(3) and match.group(4):
-                            name = match.group(3)
-                            args_str = match.group(4).replace('\\\"', '\"')
-                            try:
-                                args = json.loads(args_str) if args_str.strip() else {}
-                            except json.JSONDecodeError:
-                                # If not valid JSON, try to parse as key=value pairs
-                                for pair in re.findall(r'\"?([\w_]+)\"?\s*:\s*\"?([^\",}]+)\"?', args_str):
-                                    args[pair[0]] = pair[1].strip('\"\\\'')
-                        # Fall back to old format
-                        elif match.group(1) and match.group(2):
-                            name = match.group(1)
-                            args_str = match.group(2)
-                            try:
-                                args = json.loads(args_str) if args_str.strip() else {}
-                            except json.JSONDecodeError:
-                                # If not valid JSON, try to parse as key=value pairs
-                                for pair in re.findall(r'\"?([\w_]+)\"?\s*:\s*\"?([^\",}]+)\"?', args_str):
-                                    args[pair[0]] = pair[1].strip('\"\\\'')
-                        # Try simple function call format: function_name(arg1=val1, arg2=val2)
-                        elif match.group(5) and match.group(6):
-                            name = match.group(5)
-                            args_str = match.group(6)
-                            for pair in re.findall(r'([\w_]+)\s*=\s*([^,)]+)', args_str):
-                                args[pair[0]] = pair[1].strip('\"\\\'')
-                        else:
-                            continue
-                            
-                        tool_calls.append({
-                            'name': name,
-                            'arguments': args
-                        })
-                    except Exception as e:
-                        print(f"Error parsing tool call: {str(e)}")
-                        continue
-                
-                if tool_calls:
-                    return tool_calls
-                    
+                print(f"[extract_tools] Attempting to parse string as JSON: {response[:200]}")
+                data = json.loads(response)
+                tool_calls = data['tool_calls'] if 'tool_calls' in data else data
             except Exception as e:
-                print(f"Error in regex extraction: {str(e)}")
-                
-        return "No tools called or could not parse tool calls"
+                print(f"[extract_tools] ERROR: Failed to parse response as JSON: {e}")
+                print(f"[extract_tools] Offending string: {response[:500]}")
+                return f"Failed to parse response as JSON: {e}"
+        # If response has .text, try to parse as JSON
+        elif hasattr(response, 'text'):
+            try:
+                print(f"[extract_tools] Attempting to parse response.text as JSON: {response.text[:200]}")
+                data = json.loads(response.text)
+                tool_calls = data['tool_calls'] if 'tool_calls' in data else data
+            except Exception as e:
+                print(f"[extract_tools] ERROR: Failed to parse response.text as JSON: {e}")
+                print(f"[extract_tools] Offending string: {getattr(response, 'text', '')[:500]}")
+                return f"Failed to parse response.text as JSON: {e}"
+        else:
+            print(f"[extract_tools] Unsupported response type: {type(response)}")
+            return "Unsupported response type for tool extraction"
+        # Now process tool_calls (should be a list)
+        if not tool_calls or not isinstance(tool_calls, list):
+            print(f"[extract_tools] No tool_calls found or not a list. tool_calls: {repr(tool_calls)}")
+            return "No tool_calls found in response"
+        print(f"[extract_tools] Extracting {len(tool_calls)} tool calls...")
+        internal_calls = []
+        for i, call in enumerate(tool_calls):
+            print(f"[extract_tools] Tool call {i} type: {type(call)} dir: {dir(call)}")
+            # OpenAI object: has attribute 'function'
+            if hasattr(call, 'function'):
+                fn = call.function
+                name = getattr(fn, 'name', None)
+                args = getattr(fn, 'arguments', '{}')
+            # Dict fallback
+            elif isinstance(call, dict):
+                fn = call.get('function', {})
+                name = fn.get('name')
+                args = fn.get('arguments', '{}')
+            else:
+                print(f"[extract_tools] Tool call {i} is neither OpenAI object nor dict: {repr(call)}")
+                continue
+            try:
+                arguments = json.loads(args) if isinstance(args, str) else (args if args is not None else {})
+            except Exception as e:
+                print(f"[extract_tools] ERROR: Failed to parse arguments for tool call {i}: {e}")
+                print(f"[extract_tools] Offending args: {args}")
+                arguments = {}
+            if not name:
+                print(f"[extract_tools] Tool call {i} missing name: {repr(fn)}")
+                continue
+            print(f"[extract_tools] Tool call {i}: name={name}, arguments={arguments}")
+            internal_calls.append({'name': name, 'arguments': arguments})
+        if not internal_calls:
+            print("[extract_tools] No valid tool calls found after extraction.")
+            return "No valid tool calls found"
+        print(f"[extract_tools] Successfully extracted {len(internal_calls)} tool calls.")
+        return internal_calls
 
-    async def decide(self, question: str, called_tools: list[dict] | None = None) -> AsyncGenerator[str, None]:
-        """Decide which tool to use to answer the question.
-
-        Args:
-            question (str): The question to answer.
-            called_tools (list[dict]): The tools that have been called.
-
-        Yields:
-            str: Chunks of the LLM response.
+    async def decide(self, question: str, called_tools: list[dict] | None = None) -> AsyncGenerator[list, None]:
+        """
+        Prompt the PlannerAgent and yield the tool call response as a list (not JSON string).
         """
         try:
-            tools = await self.mcp_client.get_tools()  # get list of tools
-            if called_tools:  # we have had previous tool calls format it
-                called_tools_prompt = CalledToolHistoryResponse(
-                    question=question, tools=tools, called_tools=called_tools
-                )
-            else:
-                called_tools_prompt = []  # else pass an empty list
-
-            from app.agents.utils.schemas import DecideResponse
-            prompt = DecideResponse.render(
-                tools=tools,
-                question=question,
-                called_tools=called_tools_prompt,
-            )
-
-            self.add_messages(prompt)  # add the prompt to the messages
-            
-            # Stream the LLM response
-            async for chunk in self.stream_llm(prompt):
-                yield chunk
-                
+            from .PlannerAgent import PlannerAgent
+            planner = PlannerAgent(self.dev_prompt, self.mcp_client, [], self.tools, self.model_name)
+            result = planner.run(question)
+            # Directly yield the tool_calls list (may be OpenAI objects)
+            yield result.get('tool_calls', [])
         except Exception as e:
-            print(f"Error in decide: {str(e)}")
-            yield f"Error: {str(e)}"
+            error_msg = f"Error in decide: {str(e)}"
+            print(error_msg)
+            yield []
 
     def _format_tool_call(self, tool_call: dict) -> str:
         """Format a tool call for debug output."""
@@ -409,14 +308,7 @@ class OrchestratorAgent:
         return f"✅ {name} succeeded: {result_text}"
 
     async def stream(self, question: str) -> AsyncGenerator[dict, None]:
-        """Stream the process of answering a question, possibly involving tool calls.
-
-        Args:
-            question (str): The question to answer.
-
-        Yields:
-            dict: Streaming output, including intermediate steps and final result.
-        """
+        """Stream the process of answering a question, possibly involving tool calls."""
         called_tools = []
         for i in range(10):
             # Print step header
@@ -431,28 +323,35 @@ class OrchestratorAgent:
             # Collect response chunks
             response_chunks = []
             print("\n🤖 Processing response...")
+            tool_call_list = None
             async for chunk in self.decide(question, called_tools):
-                # Extract text from ResponseCreatedEvent if needed
-                chunk_text = getattr(chunk, 'text', str(chunk))
-                response_chunks.append(chunk_text)
-                
-                # Only yield non-empty chunks
-                if chunk_text.strip():
-                    yield {
-                        "is_task_complete": False,
-                        "require_user_input": False,
-                        "content": chunk_text,
-                    }
-                
-            # Join all response chunks for tool extraction
-            response = ''.join(response_chunks)
-            print("\n📝 Raw response:")
-            print(response)
-            
+                # If decide yields a list (tool calls), use it directly
+                if isinstance(chunk, list):
+                    tool_call_list = chunk
+                else:
+                    # Extract text from ResponseCreatedEvent if needed
+                    chunk_text = getattr(chunk, 'text', str(chunk))
+                    response_chunks.append(chunk_text)
+                    # Only yield non-empty chunks
+                    if chunk_text.strip():
+                        yield {
+                            "is_task_complete": False,
+                            "require_user_input": False,
+                            "content": chunk_text,
+                        }
+            # For logging, print the raw response
+            if tool_call_list is not None:
+                print("\n📝 Raw response (tool call objects):")
+                print(tool_call_list)
+            else:
+                response = ''.join(response_chunks)
+                print("\n📝 Raw response:")
+                print(response)
             # Extract tools from response
             print("\n🛠️  Extracting tools...")
-            tools = self.extract_tools(response)
-            
+            # Pass the actual tool call objects if available
+            tools = self.extract_tools(tool_call_list if tool_call_list is not None else response)
+            print(f"[stream] Passed to extract_tools: {type(tool_call_list) if tool_call_list is not None else type(response)}")
             if isinstance(tools, str):
                 # Handle error case
                 error_msg = f"Error extracting tools: {tools}"
@@ -464,20 +363,16 @@ class OrchestratorAgent:
                     "result": error_msg
                 })
                 break
-                
             if not tools:
                 print("ℹ️  No tools found in response. Assuming task is complete.")
                 break
-                
             # Print tool calls
             print("\n🔧 Tool calls:")
             for i, tool in enumerate(tools, 1):
                 print(f"{i}. {self._format_tool_call(tool)}")
-            
             # Call the tools
             print("\n🚀 Executing tool calls...")
             results = await self.call_tool(tools)
-            
             # Process the results
             print("\n📋 Tool results:")
             for i, (tool, result) in enumerate(zip(tools, results)):
@@ -494,12 +389,9 @@ class OrchestratorAgent:
                             result_text = str(result.content[0]) if result.content else str(result)
                     else:
                         result_text = str(result)
-                    
                     is_error = result.get('error', False) if isinstance(result, dict) else False
-                
                 # Get tool info
                 tool_name = tool.get('name', f'tool_{i}')
-                
                 # Print formatted result
                 result_display = self._format_tool_result({
                     'name': tool_name,
@@ -507,7 +399,6 @@ class OrchestratorAgent:
                     'result': result_text[:200] + ('...' if len(result_text) > 200 else '')
                 })
                 print(f"{i+1}. {result_display}")
-                
                 # Store in called_tools
                 called_tools.append({
                     "tool": tool_name,
@@ -515,19 +406,12 @@ class OrchestratorAgent:
                     "isError": is_error,
                     "result": result_text,
                 })
-
-            called_tools_history = CalledToolHistoryResponse(
-                question=question,
-                tools=[],
-                called_tools=called_tools,
-            )
-
+            called_tools_history = {"question": question, "tools": [], "called_tools": called_tools}
             yield {
                 "is_task_complete": False,
                 "require_user_input": False,
                 "content": called_tools_history,
             }
-
         yield {
             "is_task_complete": True,
             "require_user_input": False,

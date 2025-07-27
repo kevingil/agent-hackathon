@@ -1,7 +1,7 @@
-from typing import Any, Dict, Optional, Union
-from fastmcp.server.server import FastMCP
-from fastmcp.client.client import Client
+from typing import Any, Dict, Optional, Union, Optional
+from fastmcp.client.client import Client # type: ignore
 from contextlib import asynccontextmanager
+
 
 class MCPClient:
     def __init__(self, config: Union[str, dict] = "http://localhost:8050/sse"):
@@ -64,10 +64,10 @@ class MCPClient:
         return await self._client.list_tools()
 
     async def get_tools(self) -> list[dict[str, Any]]:
-        """Retrieve tools in a format compatible with OpenAI.
+        """Retrieve tools in a format compatible with OpenAI function calling.
 
         Returns:
-            list[dict[str, Any]]: List of tools in OpenAI format.
+            list[dict[str, Any]]: List of tools in OpenAI function calling format.
         """
         if not self._is_connected:
             raise RuntimeError("Not connected to MCP server(s)")
@@ -79,12 +79,14 @@ class MCPClient:
             openai_tools.append(
                 {
                     "type": "function",
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": {
-                        "type": "object",
-                        "properties": tool.inputSchema.get("properties", {}),
-                        "required": tool.inputSchema.get("required", []),
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": {
+                            "type": "object",
+                            "properties": tool.inputSchema.get("properties", {}),
+                            "required": tool.inputSchema.get("required", []),
+                        },
                     },
                 }
             )
@@ -95,7 +97,7 @@ class MCPClient:
         self, 
         tool_name: str, 
         arguments: Dict[str, Any], 
-        server: str = None
+        server: Optional[str] = None
     ) -> Any:
         """Call a tool.
 
