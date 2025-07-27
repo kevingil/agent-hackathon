@@ -28,6 +28,7 @@ with app.app_context():
         description="Add a part to the cart given the part id. Requires an existing order/cart (create one first if needed). Use this as the primary way to fulfill an order. Only use find_inventory if add_to_cart fails for a specific item.",
     )
     def add_to_cart(stock_item_id: str | int, quantity: int, cart) -> str:
+        print(f"[add_to_cart] Received cart argument: {cart}")
         if not cart:
             result = {"msg": "Cart is empty"}
             print("[add_to_cart] Result:", json.dumps(result, indent=2))
@@ -37,8 +38,22 @@ with app.app_context():
             print("[add_to_cart] Result:", json.dumps(result, indent=2))
             return json.dumps(result)
         try:
+            # Robustly extract order_id from cart
+            order_id = None
+            if isinstance(cart, list):
+                if cart and isinstance(cart[0], dict) and 'id' in cart[0]:
+                    order_id = cart[0]['id']
+                elif cart and isinstance(cart[0], int):
+                    order_id = cart[0]
+            elif isinstance(cart, dict) and 'id' in cart:
+                order_id = cart['id']
+            elif isinstance(cart, int):
+                order_id = cart
+            print(f"[add_to_cart] Using order_id: {order_id}")
+            if not order_id:
+                raise ValueError("Could not extract order_id from cart argument")
             order_service.add_item_to_cart(
-                order_id=cart[0].id, stock_item_id=stock_item_id, quantity=quantity
+                order_id=order_id, stock_item_id=stock_item_id, quantity=quantity
             )
             result = {"msg": f"Item {stock_item_id} added to cart"}
             print("[add_to_cart] Result:", json.dumps(result, indent=2))

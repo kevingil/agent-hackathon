@@ -334,22 +334,25 @@ class OrchestratorAgent:
                 response_format={"type": "json_object"},
                 max_tokens=512,
             )
-            # The response should be a JSON object with a key like 'items' or just a list
             content = response.choices[0].message.content
+            print(f"[orchestrator] Raw LLM response for item extraction: {content}")
             try:
                 parsed = json.loads(content)
+                print(f"[orchestrator] Parsed LLM response: {parsed}")
                 if isinstance(parsed, list):
                     items = parsed
                 elif isinstance(parsed, dict):
                     # Try to find the list in a key
-                    for v in parsed.values():
+                    for k, v in parsed.items():
+                        print(f"[orchestrator] Checking key '{k}': {v}")
                         if isinstance(v, list):
                             items = v
                             break
-            except Exception:
-                pass
+            except Exception as parse_exc:
+                print(f"[orchestrator] Exception parsing LLM response: {parse_exc}")
         except Exception as e:
             print(f"[orchestrator] Error extracting items: {e}")
+        print(f"[orchestrator] Final extracted items: {items}")
         if not items:
             yield {"is_task_complete": True, "require_user_input": False, "content": "Could not extract items from email."}
             return
