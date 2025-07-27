@@ -1,3 +1,5 @@
+import json
+from flask import has_app_context
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.utilities.logging import get_logger
 from app.storefront.services.order import OrderService
@@ -13,96 +15,107 @@ mcp = FastMCP(
     port=8050,  # only used for SSE transport (set this to any port)
 )
 
-inventory_service = InventoryService()
+# Always initialize services at the top
+print("[server] Initializing order_service...")
 order_service = OrderService()
+print("[server] Initializing inventory_service...")
+inventory_service = InventoryService()
 
 
 @mcp.tool(
     name="add_to_cart",
     description="Add a part to the cart given the part id",
 )
-def add_to_cart(stock_item_id: str | int, quantity: int, cart) -> list:
-    """Add a part to the cart
-    Args:
-        part_id (str | int): The part id to add to the cart
-
-    Returns:
-        str: A message indicating the part was added to the cart
-    """
+def add_to_cart(stock_item_id: str | int, quantity: int, cart) -> str:
+    print("[add_to_cart] Called. has_app_context:", has_app_context())
+    print("[add_to_cart] order_service:", order_service)
     if not cart:
-        return [{"msg": "Cart is empty"}]
+        result = {"msg": "Cart is empty"}
+        print(f"[add_to_cart] Returning: {type(result)} {result}")
+        return json.dumps(result)
     if not stock_item_id:
-        return [{"msg": "Item id is required"}]
-    if order_service:
-        try:
-            order_service.add_item_to_cart(
-                order_id=cart[0].id, stock_item_id=stock_item_id, quantity=quantity
-            )
-            return [{"msg": f"Item {stock_item_id} added to cart"}]
-        except Exception as e:
-            return [{"msg": f"Error adding item to cart: {str(e)}"}]
+        result = {"msg": "Item id is required"}
+        print(f"[add_to_cart] Returning: {type(result)} {result}")
+        return json.dumps(result)
+    try:
+        order_service.add_item_to_cart(
+            order_id=cart[0].id, stock_item_id=stock_item_id, quantity=quantity
+        )
+        result = {"msg": f"Item {stock_item_id} added to cart"}
+        print(f"[add_to_cart] Returning: {type(result)} {result}")
+        return json.dumps(result)
+    except Exception as e:
+        print(f"[add_to_cart] Exception: {e}")
+        result = {"msg": f"Error adding item to cart: {str(e)}"}
+        print(f"[add_to_cart] Returning: {type(result)} {result}")
+        return json.dumps(result)
+    result = {"msg": "Unknown error"}
+    print(f"[add_to_cart] Returning: {type(result)} {result}")
+    return json.dumps(result)
 
 
 @mcp.tool(name="remove_from_cart", description="Remove a item from the cart")
 def remove_from_cart(stock_item_id: int | str, cart: list) -> str:
-    """
-    Search remove an item from the cart
-
-    Args:
-        keyword: The keyword to search for in the inventory database
-
-    Returns:
-        str: A message indicating the part was found in the inventory
-    """
+    print("[remove_from_cart] Called. has_app_context:", has_app_context())
+    print("[remove_from_cart] order_service:", order_service)
     if not cart:
-        return [{"msg": "Cart is empty"}]
+        result = {"msg": "Cart is empty"}
+        print(f"[remove_from_cart] Returning: {type(result)} {result}")
+        return json.dumps(result)
     if not stock_item_id:
-        return [{"msg": "Item id is required"}]
-    if order_service:
-        try:
-            order_service.remove_item_from_cart(
-                order_id=cart[0].id, item_id=stock_item_id
-            )
-            return [{"msg": f"Item {stock_item_id} has been removed from     cart"}]
-        except Exception as e:
-            return [{"msg": f"Error removing item to cart: {str(e)}"}]
+        result = {"msg": "Item id is required"}
+        print(f"[remove_from_cart] Returning: {type(result)} {result}")
+        return json.dumps(result)
+    try:
+        order_service.remove_item_from_cart(
+            order_id=cart[0].id, item_id=stock_item_id
+        )
+        result = {"msg": f"Item {stock_item_id} has been removed from cart"}
+        print(f"[remove_from_cart] Returning: {type(result)} {result}")
+        return json.dumps(result)
+    except Exception as e:
+        print(f"[remove_from_cart] Exception: {e}")
+        result = {"msg": f"Error removing item from cart: {str(e)}"}
+        print(f"[remove_from_cart] Returning: {type(result)} {result}")
+        return json.dumps(result)
+    result = {"msg": "Unknown error"}
+    print(f"[remove_from_cart] Returning: {type(result)} {result}")
+    return json.dumps(result)
 
 
 @mcp.tool(name="find_inventory", description="Search the database inventory for a part")
 def find_inventory(keyword: str, min_price: float, max_price: float) -> str:
-    """
-    Search the database inventory for a part using a keryword
-    Args:
-        keyword: The keyword to search for in the inventory database
-
-    Returns:
-        str: A message indicating the part was found in the inventory
-    """
-
+    print("[find_inventory] Called. has_app_context:", has_app_context())
+    print("[find_inventory] inventory_service:", inventory_service)
     if not keyword:
-        return [["error", "Keyword is required"]]
-    if inventory_service:
-        try:
-            items = inventory_service.list_stock_items(
-                search=keyword, min_price=min_price, max_price=max_price
-            )
-        except Exception as e:
-            return [["error", f"Error searching inventory: {str(e)}"]]
-
-    results = []
-    for item in items:
-        results.append(
-            {
-                "id": str(item.id),
-                "session_id": str(item.name),
-                "session_name": str(item.description),
-                "cost": str(item.cost),
-                "list_price": str(item.list_price),
-                "quantity": str(item.quantity),
-            }
+        result = json.dumps([{"error": "Keyword is required"}])
+        print(f"[find_inventory] Returning: {type(result)} {result}")
+        return result
+    try:
+        items = inventory_service.list_stock_items(
+            search=keyword, min_price=min_price, max_price=max_price
         )
-
-    return results
+    except Exception as e:
+        print(f"[find_inventory] Exception: {e}")
+        result = json.dumps([{"error": f"Error searching inventory: {str(e)}"}])
+        print(f"[find_inventory] Returning: {type(result)} {result}")
+        return result
+    results = []
+    if items:
+        for item in items:
+            results.append(
+                {
+                    "id": str(item.id),
+                    "session_id": str(item.name),
+                    "session_name": str(item.description),
+                    "cost": str(item.cost),
+                    "list_price": str(item.list_price),
+                    "quantity": str(item.quantity),
+                }
+            )
+    result = json.dumps(results)
+    print(f"[find_inventory] Returning: {type(result)} {result}")
+    return result
 
 
 # make install
@@ -111,21 +124,29 @@ def find_inventory(keyword: str, min_price: float, max_price: float) -> str:
 
 @mcp.tool(name="checkout_cart", description="Check out the cart")
 def checkout_cart(cart_id: str) -> str:
-    """ """
+    print("[checkout_cart] Called. has_app_context:", has_app_context())
+    print("[checkout_cart] order_service:", order_service)
     if not cart_id:
-        return [{"msg": "Cart id is required"}]
-    if order_service:
-        try:
-            order = order_service.place_order(order_id=cart_id)
-            return [
-                {
-                    "order_id": order.id,
-                    "status": order.status,
-                    "placed_at": order.submitted_at.isoformat(),
-                }
-            ]
-        except Exception as e:
-            return [{"msg": f"Error placing order: {str(e)}"}]
+        result = {"msg": "Cart id is required"}
+        print(f"[checkout_cart] Returning: {type(result)} {result}")
+        return json.dumps(result)
+    try:
+        order = order_service.place_order(order_id=cart_id)
+        result = {
+            "order_id": order.id,
+            "status": order.status,
+            "placed_at": order.submitted_at.isoformat(),
+        }
+        print(f"[checkout_cart] Returning: {type(result)} {result}")
+        return json.dumps(result)
+    except Exception as e:
+        print(f"[checkout_cart] Exception: {e}")
+        result = {"msg": f"Error placing order: {str(e)}"}
+        print(f"[checkout_cart] Returning: {type(result)} {result}")
+        return json.dumps(result)
+    result = {"msg": "Unknown error"}
+    print(f"[checkout_cart] Returning: {type(result)} {result}")
+    return json.dumps(result)
 
 
 # Run the server
