@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { getOrders } from "../api/orders";
 import type { Order } from "../types/Order";
 
@@ -7,8 +7,9 @@ const OrdersPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
-  const [status, setStatus] = useState<string>("ready");
   const [search, setSearch] = useState<string>("");
+  const [debouncedSearch, setDebouncedSearch] = useState<string>("");
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchOrders = async () => {
     setLoading(true);
@@ -27,12 +28,21 @@ const OrdersPage = () => {
   useEffect(() => {
     fetchOrders();
     // eslint-disable-next-line
-  }, [status]);
+  }, []);
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 400);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [search]);
 
   const filteredOrders = orders.filter(
     (order) =>
-      (!status || order.status === status) &&
-      (!search || order.id.toString().includes(search) || (order.items && order.items.some(item => item.name.toLowerCase().includes(search.toLowerCase()))))
+      !debouncedSearch || order.id.toString().includes(debouncedSearch) || (order.items && order.items.some(item => item.name.toLowerCase().includes(debouncedSearch.toLowerCase())))
   );
 
   const selectedOrder = filteredOrders.find((o) => o.id === selected) || filteredOrders[0];
@@ -41,25 +51,23 @@ const OrdersPage = () => {
     <div style={{ display: "flex", height: "calc(100vh - 80px)", background: "#f7f8fa" }}>
       {/* Sidebar */}
       <div style={{ width: 320, background: "#fff", borderRight: "1px solid #eee", display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: 20, borderBottom: "1px solid #eee", background: "#fafbfc" }}>
+        <div style={{ padding: 20, borderBottom: "1px solid #eee", background: "#fff" }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-            <select value={status} onChange={e => setStatus(e.target.value)} style={{ padding: 6, borderRadius: 4, flex: 1 }}>
-              <option value="">All</option>
-              <option value="ready">Ready</option>
-              <option value="submitted">Submitted</option>
-              <option value="processing">Processing</option>
-              <option value="shipped">Shipped</option>
-              <option value="completed">Completed</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
             <input
               type="text"
               placeholder="Search orders..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              style={{ padding: 6, borderRadius: 4, flex: 2, border: "1px solid #ddd" }}
+              style={{ 
+                padding: 10, 
+                borderRadius: 6, 
+                flex: 1, 
+                color: "#000",
+                border: "1px solid #ddd", 
+                fontSize: 16, 
+                background: "#fff",
+                }}
             />
-            <button onClick={fetchOrders} style={{ padding: "6px 12px", borderRadius: 4, border: "none", background: "#007bff", color: "#fff", fontWeight: 600, cursor: "pointer" }}>⟳</button>
           </div>
         </div>
         <div style={{ flex: 1, overflowY: "auto" }}>
